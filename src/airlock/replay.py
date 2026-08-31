@@ -5,9 +5,9 @@ diff the outcome: "this change would have blocked 34 previously-allowed queries
 and unblocked 6."
 
 This works because `policy.evaluate` is a pure function of (features, policies).
-The ledger already stores the features and the measurements -- the blast radius
-and the smallest group -- so replay never re-parses SQL and never touches the
-underlying tables. It is an analytical scan over the ledger, which is exactly
+The ledger already stores the features and the measurements -- the blast radius,
+the smallest group, and the worst taint score -- so replay never re-parses SQL
+and never touches the underlying tables. It is an analytical scan over the ledger, which is exactly
 what the engine underneath is built for.
 
 Replay is a *what-if*: the amended policy set is built in memory and the real
@@ -83,8 +83,8 @@ def replay(conn: pyexasol.ExaConnection, principal: str,
         policies = load_policies(conn, principal)
     replay_id = uuid.uuid4().hex
 
-    sql = ("SELECT SEQ, FEATURES, DECISION, EST_ROWS, MIN_GROUP FROM AIRLOCK.LEDGER "
-           "WHERE FEATURES IS NOT NULL ORDER BY SEQ")
+    sql = ("SELECT SEQ, FEATURES, DECISION, EST_ROWS, MIN_GROUP, TAINT_MAX "
+           "FROM AIRLOCK.LEDGER WHERE FEATURES IS NOT NULL ORDER BY SEQ")
     if limit:
         sql += f" LIMIT {int(limit)}"
 
@@ -98,7 +98,9 @@ def replay(conn: pyexasol.ExaConnection, principal: str,
         features = _features_from_json(row["FEATURES"])
         est = int(row["EST_ROWS"]) if row["EST_ROWS"] is not None else None
         grp = int(row["MIN_GROUP"]) if row["MIN_GROUP"] is not None else None
-        new_decision = evaluate(features, policies, affected_rows=est, min_group=grp)
+        tnt = float(row["TAINT_MAX"]) if row["TAINT_MAX"] is not None else None
+        new_decision = evaluate(features, policies, affected_rows=est, min_group=grp,
+                                taint_max=tnt)
         new = new_decision.effect
         did_change = new != old
         if did_change:

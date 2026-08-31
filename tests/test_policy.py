@@ -108,3 +108,28 @@ def test_k_anonymity_does_not_fire_on_a_write_predicate():
                 TARGET_TABLE="CUSTOMER", TARGET_COLUMN="C_ACCTBAL", THRESHOLD=20)]
     f = analyze("UPDATE TPCH.CUSTOMER SET C_COMMENT = 'x' WHERE C_ACCTBAL > 0")
     assert evaluate(f, p, affected_rows=10).effect == ALLOW
+
+
+def test_tainted_result_set_is_withheld():
+    p = [policy(RULE_KIND="TAINT_BLOCK", THRESHOLD=0.7)]
+    d = evaluate(analyze("SELECT C_COMMENT FROM TPCH.CUSTOMER"), p, taint_max=0.85)
+    assert d.effect == DENY
+    assert "injected instructions" in d.reason_text
+
+
+def test_taint_below_the_threshold_is_recorded_not_blocked():
+    """Someone writing 'drop table' in a note is not an attack. The score is
+    kept either way -- the ledger records what was measured, not just what
+    tripped a rule."""
+    p = [policy(RULE_KIND="TAINT_BLOCK", THRESHOLD=0.7)]
+    d = evaluate(analyze("SELECT C_COMMENT FROM TPCH.CUSTOMER"), p, taint_max=0.25)
+    assert d.effect == ALLOW
+
+
+def test_moving_the_taint_threshold_changes_the_verdict():
+    """The threshold is replayable like every other one."""
+    q = analyze("SELECT C_COMMENT FROM TPCH.CUSTOMER")
+    assert evaluate(q, [policy(RULE_KIND="TAINT_BLOCK", THRESHOLD=0.7)],
+                    taint_max=0.45).effect == ALLOW
+    assert evaluate(q, [policy(RULE_KIND="TAINT_BLOCK", THRESHOLD=0.4)],
+                    taint_max=0.45).effect == DENY
