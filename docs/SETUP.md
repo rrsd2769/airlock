@@ -46,9 +46,43 @@ the Python environment.
 
 ```bash
 uv run python -m airlock.demo      # scripted walk-through
+uv run airlock-api                 # governance console on http://127.0.0.1:8000
 uv run airlock-mcp                 # governed MCP server for an agent
 uv run pytest                      # policy engine tests (no database needed)
 ```
+
+## 5. Connect an agent
+
+`airlock-mcp` speaks MCP over stdio, so any MCP client can drive it. Point the
+client at the repo with an absolute path:
+
+```json
+{
+  "mcpServers": {
+    "airlock": {
+      "command": "uv",
+      "args": ["run", "--directory", "/absolute/path/to/airlock", "airlock-mcp"]
+    }
+  }
+}
+```
+
+Five tools come up: `list_schemas`, `describe_table`, `run_query`,
+`explain_refusal`, `verify_ledger`. Every one of them goes through the gateway
+and lands in the ledger, including the catalog browsing.
+
+Worth asking the agent to try, in order -- each trips a different rule, and the
+refusal tells it enough to correct itself:
+
+| Ask for | What comes back |
+|---|---|
+| `SELECT C_PHONE FROM TPCH.CUSTOMER` | DENY -- the column is not readable at any aggregation |
+| `SELECT C_NATIONKEY, AVG(C_ACCTBAL) FROM TPCH.CUSTOMER GROUP BY C_NATIONKEY` | ALLOW, with the measured smallest group |
+| `SELECT S_NAME, S_COMMENT FROM TPCH.SUPPLIER` | DENY -- the rows carry injected instructions |
+| `UPDATE TPCH.ORDERS SET O_ORDERPRIORITY = '1-URGENT' WHERE O_ORDERSTATUS = 'F'` | REQUIRE_APPROVAL -- 14,504 rows against a cap of 500 |
+| `SELECT * FROM AIRLOCK.POLICY` | DENY -- the airlock is not reachable through itself |
+
+Requires `mcp >= 2.1`. The 1.x `FastMCP` import path no longer exists.
 
 ## Connection details
 
