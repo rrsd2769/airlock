@@ -98,11 +98,11 @@ before you have to live with it.
 └─────────────────────────────────────────────┘
       │  pyexasol
       ▼
-┌─────────────────────────────────────────────┐
-│  Exasol Personal                            │
-│   AIRLOCK.POLICY    declarative rules       │
-│   AIRLOCK.LEDGER    hash-chained decisions  │
-│   AIRLOCK.TAINT     injection sweep results │
+┌─────────────────────────────────────────────┐     ┌────────────────────┐
+│  Exasol Personal                            │◀────│  console  :8000    │
+│   AIRLOCK.POLICY    declarative rules       │ read│  ledger · taint    │
+│   AIRLOCK.LEDGER    hash-chained decisions  │ only│  · replay what-if  │
+│   AIRLOCK.TAINT     injection sweep results │     └────────────────────┘
 │   LEDGER_CHECK      SQL view: HASH_SHA256   │
 │   LEDGER_BREAKS     SQL view: audit result  │
 │   SCAN_TAINT()      LUA SCALAR script       │
@@ -122,6 +122,7 @@ uv run python -m airlock.demo                             # see what it stops
 uv run python -m airlock.taint --schema TPCH              # find the poisoned rows
 uv run python -m airlock.traffic --count 400              # build a decision history
 uv run python -m airlock.replay --set acctbal-k-anon=100  # what would that have cost?
+uv run airlock-api                                        # the console, on :8000
 ```
 
 No script language container is required: the in-database logic is SQL and Lua,
@@ -144,7 +145,8 @@ and Lua is compiled into Exasol itself.
 | `src/airlock/replay.py` | What-if replay of the ledger against amended rules |
 | `src/airlock/traffic.py` | Synthetic agent traffic, through the real gateway |
 | `src/airlock/mcp_server.py` | Governed MCP surface for agents |
-| `console/` | Live governance console |
+| `src/airlock/api.py` | Read-only HTTP surface behind the console |
+| `console/` | Live governance console: ledger, taint inventory, replay |
 
 ## Built for
 
