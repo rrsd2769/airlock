@@ -34,6 +34,12 @@ echo "    Lua is compiled into Exasol; no script language container is needed."
 step "Creating schema, UDFs, and policies"
 uv run python scripts/apply_sql.py sql/00_schema.sql sql/20_udfs.sql sql/10_policies.sql
 
+step "Planting the demo's injected rows"
+uv run python scripts/apply_sql.py sql/30_taint_seed.sql
+
+step "Sweeping the warehouse's free text for injected instructions"
+uv run python -m airlock.taint --schema TPCH --top 3
+
 step "Running the tests"
 uv run pytest -q
 

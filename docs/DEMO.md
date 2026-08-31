@@ -10,13 +10,13 @@ The submission allows a maximum of 3 minutes. This is the running order.
 > governance. Nobody has. Once the agent is inside the database, nothing watches
 > it."
 
-## 0:20 — Ungoverned baseline (25s)
+## 0:20 — Ungoverned baseline (20s)
 
 Agent connected to the stock MCP server. Ask it for customer contact details.
 It complies instantly. Ask it to clean up some records. It rewrites 2,900 rows.
 No record of either.
 
-## 0:45 — Same agent, through AIRLOCK (45s)
+## 0:40 — Same agent, through AIRLOCK (40s)
 
 Reconnect the agent to the AIRLOCK MCP server. Same two requests.
 
@@ -30,7 +30,7 @@ Reconnect the agent to the AIRLOCK MCP server. Same two requests.
 > "Aggregating is not the same as being anonymous. What hides a person is how
 > many people share their bucket — so we measure the buckets."
 
-## 1:30 — Blast radius (35s)
+## 1:20 — Blast radius (30s)
 
 The cleanup write. AIRLOCK rewrites it into `SELECT COUNT(*)`, runs it, and
 holds the statement: **2,900 rows, cap is 500**.
@@ -42,7 +42,29 @@ holds the statement: **2,900 rows, cap is 500**.
 
 Show the generated rollback statement.
 
-## 2:05 — The ledger (25s)
+## 1:50 — Taint (25s)
+
+```bash
+uv run python -m airlock.taint --schema TPCH
+```
+
+Eighteen free-text columns swept in half a second. Eight rows in the warehouse
+are carrying instructions addressed to whatever model reads them next — the
+worst is a supplier's own description containing forged chat delimiters and
+`drop table AIRLOCK.LEDGER`.
+
+Then ask the agent for customer notes across the range that holds one:
+
+- `SELECT C_NAME, C_COMMENT ... WHERE C_CUSTKEY BETWEEN 400 AND 420` →
+  **BLOCKED**, taint 0.85.
+- The same columns on a clean slice → **ALLOWED**, taint 0.00.
+
+> "Everyone scans the prompt. The attack isn't in the prompt — it's in a row
+> somebody was allowed to write two years ago. So we scan the rows on the way
+> out. Scoring all three text columns of a 120,000-row table is 185
+> milliseconds, because the scoring happens next to the data."
+
+## 2:15 — The ledger (20s)
 
 Every decision, hash-chained. Run `verify_ledger` → intact.
 
@@ -51,7 +73,7 @@ again. The chain breaks at exactly that sequence number, and every entry after
 it is flagged. The verification runs *inside* Exasol; the audit trail never
 leaves to be trusted.
 
-## 2:30 — Replay (25s)
+## 2:35 — Replay (20s)
 
 ```bash
 uv run python -m airlock.replay --set acctbal-k-anon=100
@@ -60,8 +82,8 @@ uv run python -m airlock.replay --set acctbal-k-anon=100
 Nothing is written to `AIRLOCK.POLICY` — this asks what the change *would* have
 cost before anyone lives with it.
 
-> "Twenty queries we allowed would be blocked under the tighter rule — each one
-> a group of 94 people where we now want 100. Loosen it to k=5 instead and 53
+> "Twenty-two queries we allowed would be blocked under the tighter rule — each
+> one a group of 94 people where we now want 100. Loosen it to k=5 instead and 48
 > statements we refused would have passed. That's the entire decision history
 > re-decided, and it comes back instantly."
 
@@ -69,9 +91,13 @@ The reverse direction reads just as well, and is a good one to have ready if a
 judge asks:
 
 ```bash
-uv run python -m airlock.replay --set write-blast-radius=100   # 8 more writes held
-uv run python -m airlock.replay --disable no-raw-pii-phone     # 18 refusals undone
+uv run python -m airlock.replay --set write-blast-radius=100   # 10 more writes held
+uv run python -m airlock.replay --set block-tainted-rows=0.4   #  8 more withheld
+uv run python -m airlock.replay --disable no-raw-pii-phone     # 19 refusals undone
 ```
+
+Every threshold in the policy set is replayable, because every measurement the
+decision rested on is in the ledger.
 
 > "Replay works because the policy decision is a pure function and the ledger
 > already stores what it needs. We never re-run the agent's SQL, and we never
@@ -90,8 +116,12 @@ Generate a decision history worth replaying — a fresh ledger has nothing to
 diff:
 
 ```bash
-uv run python -m airlock.traffic --count 400
+uv run python scripts/apply_sql.py sql/30_taint_seed.sql   # plant the payloads
+uv run python -m airlock.taint --schema TPCH               # build the inventory
+uv run python -m airlock.traffic --count 400               # build the history
 ```
+
+`./scripts/bootstrap.sh` already does the first two.
 
 Every statement goes through the real gateway, so the ledger is evidence rather
 than fixture data. The numbers quoted above are from `--count 400 --seed 7`;

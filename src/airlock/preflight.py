@@ -78,6 +78,49 @@ def build_group_probe(sql: str) -> str | None:
     return f"SELECT MIN(GRP_N) AS MIN_GROUP FROM ({inner.sql(dialect='postgres')})"
 
 
+def build_taint_probe(sql: str, text_columns: list[str]) -> str | None:
+    """Rewrite a query into the worst taint score among the rows it would return.
+
+    The sweep in `airlock.taint` says where the poison is in the warehouse. This
+    asks the narrower question the gateway actually needs answered: does *this*
+    result set contain it? Same shape as the other two probes -- keep the query's
+    FROM and WHERE, throw its projections away, and measure.
+
+    The LIMIT is deliberately dropped. A LIMIT without an ORDER BY returns an
+    arbitrary slice, so probing with it would scan rows the real execution might
+    not return, and miss rows it would. We score every candidate row instead.
+
+    Aggregates are skipped by the caller: they return numbers, and an injection
+    needs text to ride out on.
+    """
+    if not text_columns:
+        return None
+    try:
+        tree = sqlglot.parse_one(sql, read="postgres")
+    except Exception:
+        return None
+    if not isinstance(tree, exp.Select):
+        return None
+
+    inner = tree.copy()
+    projections = []
+    for i, column in enumerate(text_columns):
+        try:
+            call = sqlglot.parse_one(f"AIRLOCK.SCAN_TAINT({column})", read="postgres")
+        except Exception:
+            return None
+        projections.append(exp.alias_(call, f"RAW_{i}"))
+    inner.set("expressions", projections)
+    for clause in ("order", "limit", "offset", "distinct"):
+        inner.set(clause, None)
+
+    # SCAN_TAINT returns "score|patterns"; the score is everything before the bar.
+    scores = [f"TO_NUMBER(SUBSTR(RAW_{i}, 1, INSTR(RAW_{i}, '|') - 1))"
+              for i in range(len(text_columns))]
+    worst = scores[0] if len(scores) == 1 else f"GREATEST({', '.join(scores)})"
+    return f"SELECT MAX({worst}) AS TAINT_MAX FROM ({inner.sql(dialect='postgres')})"
+
+
 def build_rollback(sql: str, features: Features, snapshot_table: str) -> str | None:
     """Compensating statement that reverses the write.
 

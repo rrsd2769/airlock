@@ -78,6 +78,34 @@ def _k_anon_reads(rng: random.Random) -> list[str]:
     ]
 
 
+def _text_reads(rng: random.Random) -> list[str]:
+    """Free-text reads -- notes, comments, descriptions.
+
+    This is how an agent meets a prompt injection: not in its prompt, but in a
+    column somebody was allowed to write to. Some of these slices contain the
+    payloads planted by sql/30_taint_seed.sql and some do not.
+    """
+    lo = rng.choice([1, 200, 400, 900, 1500, 1800, 2400, 2500])
+    return [
+        f"SELECT C_NAME, C_COMMENT FROM TPCH.CUSTOMER "
+        f"WHERE C_CUSTKEY BETWEEN {lo} AND {lo + 20}",
+
+        f"SELECT C_COMMENT FROM TPCH.CUSTOMER WHERE C_NATIONKEY = {rng.randint(0, 24)}",
+
+        f"SELECT O_COMMENT FROM TPCH.ORDERS WHERE O_ORDERKEY BETWEEN {lo * 2} "
+        f"AND {lo * 2 + 500}",
+
+        "SELECT S_NAME, S_COMMENT FROM TPCH.SUPPLIER",
+
+        f"SELECT P_NAME, P_COMMENT FROM TPCH.PART WHERE P_SIZE = {rng.randint(1, 50)}",
+
+        f"SELECT L_COMMENT FROM TPCH.LINEITEM WHERE L_ORDERKEY = "
+        f"{rng.choice([1863, 1863, rng.randint(1, 6000)])}",
+
+        "SELECT N_NAME, N_COMMENT FROM TPCH.NATION",
+    ]
+
+
 def _identifying_reads(rng: random.Random) -> list[str]:
     """Questions that reach for the individual. All of these should be refused."""
     return [
@@ -125,12 +153,13 @@ def _attacks(rng: random.Random) -> list[str]:
 
 # (generator, weight) -- reads dominate, as they do in real agent traffic.
 MIX = [
-    (_reads, 34),
-    (_k_anon_reads, 30),
-    (_identifying_reads, 18),
-    (_wide_writes, 10),
-    (_narrow_writes, 4),
-    (_attacks, 4),
+    (_reads, 26),
+    (_k_anon_reads, 24),
+    (_text_reads, 22),
+    (_identifying_reads, 14),
+    (_wide_writes, 8),
+    (_narrow_writes, 3),
+    (_attacks, 3),
 ]
 
 

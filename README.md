@@ -45,9 +45,27 @@ analytics database.* On a row store, counting the blast radius of every write on
 the hot path would be the slowest thing in the system.
 
 **3. Data-side prompt-injection taint.** Everyone scans the prompt. Almost
-nobody scans the rows coming back. A parallel Python UDF sweeps free-text
-columns across the warehouse and scores rows carrying instructions aimed at
-whatever model reads them next. Result sets containing tainted rows are withheld.
+nobody scans the rows coming back — which is where injection against a database
+agent actually lives, planted months earlier in a column that legitimately
+accepts free text from outside.
+
+Two halves. A **sweep** scores every free-text column in a schema and records
+what it finds in `AIRLOCK.TAINT` — catalog-driven, so a new table needs no
+change to any list:
+
+```bash
+uv run python -m airlock.taint --schema TPCH
+#   18 free-text columns swept in 0.47s
+```
+
+And a **per-query scan**: before an allowed `SELECT` releases its rows, AIRLOCK
+rewrites it to measure the worst taint score among the rows it would return, and
+withholds the result set if that crosses the policy threshold. Scoring all three
+text columns of the 120,515-row `LINEITEM` table — 361,545 scores — takes 185 ms,
+because the scoring runs next to the data instead of dragging it out.
+
+Aggregates are skipped: they return numbers, and an injection needs text to ride
+out on.
 
 **4. Tamper-evident ledger + replay.** Every decision is hash-chained to the one
 before it. Verification is a single analytical query — Exasol's native
@@ -62,7 +80,7 @@ single statement of the agent's SQL:
 
 ```bash
 uv run python -m airlock.replay --set acctbal-k-anon=100
-#   replayed 409 decisions: 20 would now be blocked, 0 would now be allowed
+#   replayed 411 decisions: 22 would now be blocked, 0 would now be allowed
 ```
 
 Nothing is written to `AIRLOCK.POLICY`. You find out what a rule change costs
@@ -101,6 +119,7 @@ Requires [Exasol Personal](https://github.com/exasol/exasol-personal) running lo
 curl https://www.exasol.com/install/starter-kit.sh | sh   # database + sample data
 ./scripts/bootstrap.sh                                    # schema, scripts, policies
 uv run python -m airlock.demo                             # see what it stops
+uv run python -m airlock.taint --schema TPCH              # find the poisoned rows
 uv run python -m airlock.traffic --count 400              # build a decision history
 uv run python -m airlock.replay --set acctbal-k-anon=100  # what would that have cost?
 ```
@@ -114,11 +133,13 @@ and Lua is compiled into Exasol itself.
 |---|---|
 | `sql/00_schema.sql` | Policy, ledger, taint, session tables |
 | `sql/10_policies.sql` | The seed policy set the demo argues about |
+| `sql/30_taint_seed.sql` | Injected rows planted in TPC-H free text, for the demo |
 | `sql/20_udfs.sql` | Chain-verification views + Lua scripts (no container needed) |
 | `src/airlock/analyze.py` | SQL → policy-relevant features (sqlglot) |
 | `src/airlock/policy.py` | Pure decision function, reused by replay |
 | `src/airlock/preflight.py` | Blast-radius and group-size probes + rollback synthesis |
 | `src/airlock/ledger.py` | Hash chain append and in-database verify |
+| `src/airlock/taint.py` | Catalog-driven sweep of the warehouse's free text |
 | `src/airlock/gateway.py` | The airlock itself |
 | `src/airlock/replay.py` | What-if replay of the ledger against amended rules |
 | `src/airlock/traffic.py` | Synthetic agent traffic, through the real gateway |
