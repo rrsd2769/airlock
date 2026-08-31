@@ -47,8 +47,8 @@ def head(conn: pyexasol.ExaConnection) -> tuple[int, str]:
 def append(conn: pyexasol.ExaConnection, *, session_id: str, principal: str,
            stmt_kind: str, statement: str, features_json: str, decision: str,
            matched_policies: str, reason: str, est_rows: int | None,
-           rollback_sql: str | None, taint_max: float | None,
-           latency_ms: float | None) -> LedgerEntry:
+           min_group: int | None, rollback_sql: str | None,
+           taint_max: float | None, latency_ms: float | None) -> LedgerEntry:
     prev_seq, prev_hash = head(conn)
     seq = prev_seq + 1
     ts = conn.execute("SELECT TO_CHAR(SYSTIMESTAMP, "
@@ -59,20 +59,21 @@ def append(conn: pyexasol.ExaConnection, *, session_id: str, principal: str,
         """
         INSERT INTO AIRLOCK.LEDGER
             (SEQ, SESSION_ID, TS, PRINCIPAL, STMT_KIND, STMT_TEXT, FEATURES,
-             DECISION, MATCHED_POLICIES, REASON, EST_ROWS, ROLLBACK_SQL,
-             TAINT_MAX, LATENCY_MS, PREV_HASH, ENTRY_HASH)
+             DECISION, MATCHED_POLICIES, REASON, EST_ROWS, MIN_GROUP,
+             ROLLBACK_SQL, TAINT_MAX, LATENCY_MS, PREV_HASH, ENTRY_HASH)
         VALUES ({seq}, {session_id},
                 TO_TIMESTAMP({ts}, 'YYYY-MM-DD HH24:MI:SS.FF6'),
                 {principal}, {stmt_kind}, {stmt_text}, {features},
-                {decision}, {matched}, {reason}, {est_rows}, {rollback_sql},
-                {taint_max}, {latency_ms}, {prev_hash}, {entry_hash})
+                {decision}, {matched}, {reason}, {est_rows}, {min_group},
+                {rollback_sql}, {taint_max}, {latency_ms}, {prev_hash},
+                {entry_hash})
         """,
         {
             "seq": seq, "session_id": session_id, "ts": ts,
             "principal": principal, "stmt_kind": stmt_kind,
             "stmt_text": statement, "features": features_json,
             "decision": decision, "matched": matched_policies,
-            "reason": reason, "est_rows": est_rows,
+            "reason": reason, "est_rows": est_rows, "min_group": min_group,
             "rollback_sql": rollback_sql, "taint_max": taint_max,
             "latency_ms": latency_ms, "prev_hash": prev_hash,
             "entry_hash": digest,

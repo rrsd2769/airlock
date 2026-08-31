@@ -58,6 +58,7 @@ def load_policies(conn: pyexasol.ExaConnection, principal: str) -> list[dict]:
 
 def evaluate(features: Features, policies: list[dict], *,
              affected_rows: int | None = None,
+             min_group: int | None = None,
              taint_max: float | None = None) -> Decision:
     """Pure function: features + policy set -> decision.
 
@@ -99,12 +100,23 @@ def evaluate(features: Features, policies: list[dict], *,
             # k-anonymity governs what an agent can *see*, so it applies to
             # projections, not to a predicate in a write's WHERE clause.
             if features.kind == "SELECT" and _touches_column(features, p):
+                k = int(p["THRESHOLD"])
                 if not features.has_aggregate:
                     d.apply(p["EFFECT"],
                             f"{p['NAME']}: {p['TARGET_COLUMN']} is aggregate-only "
-                            f"(k={int(p['THRESHOLD'])}), statement selects it raw",
+                            f"(k={k}), statement selects it raw",
                             p["POLICY_ID"])
-                # Group-size check is measured at preflight; see gateway.
+                elif min_group is None:
+                    # An aggregate whose group sizes we could not measure is not
+                    # evidence of anonymity. Same posture as an unmeasured write.
+                    d.apply(REQUIRE_APPROVAL,
+                            f"{p['NAME']}: group size could not be measured",
+                            p["POLICY_ID"])
+                elif min_group < k:
+                    d.apply(p["EFFECT"],
+                            f"{p['NAME']}: smallest group is {min_group} rows, "
+                            f"k={k} required",
+                            p["POLICY_ID"])
 
         elif kind == "BLAST_RADIUS":
             if features.kind in {"UPDATE", "DELETE", "INSERT", "MERGE"}:

@@ -54,6 +54,7 @@ CREATE OR REPLACE TABLE LEDGER (
     MATCHED_POLICIES    VARCHAR(2000),        -- csv of POLICY_ID
     REASON              VARCHAR(4000),
     EST_ROWS            DECIMAL(18,0),        -- measured blast radius, not an estimate
+    MIN_GROUP           DECIMAL(18,0),        -- measured smallest group, not an estimate
     ROLLBACK_SQL        VARCHAR(2000000),     -- compensating statement for writes
     TAINT_MAX           DECIMAL(9,4),
     LATENCY_MS          DECIMAL(12,3),

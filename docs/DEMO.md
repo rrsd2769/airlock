@@ -22,7 +22,13 @@ Reconnect the agent to the AIRLOCK MCP server. Same two requests.
 
 - Contact details → **BLOCKED**, with the policy name and the reason.
 - `SELECT *` → still **BLOCKED**; the protected column can't be smuggled.
-- Aggregate over the same column → **ALLOWED**. The point is precision, not a wall.
+- Aggregate over the same column, grouped by market segment → **ALLOWED**.
+  The point is precision, not a wall.
+- The same aggregate sliced by nation *and* segment → **BLOCKED**: smallest
+  group is 10 rows, k=20 required.
+
+> "Aggregating is not the same as being anonymous. What hides a person is how
+> many people share their bucket — so we measure the buckets."
 
 ## 1:30 — Blast radius (35s)
 
@@ -47,11 +53,29 @@ leaves to be trusted.
 
 ## 2:30 — Replay (25s)
 
-Tighten `acctbal-k-anon` from k=20 to k=100. Replay the full ledger.
+```bash
+uv run python -m airlock.replay --set acctbal-k-anon=100
+```
 
-> "Thirty-four queries we allowed last week would be blocked under the new
-> policy. Six that we blocked would now pass. That's a scan over the whole
-> decision history, and it comes back instantly."
+Nothing is written to `AIRLOCK.POLICY` — this asks what the change *would* have
+cost before anyone lives with it.
+
+> "Twenty queries we allowed would be blocked under the tighter rule — each one
+> a group of 94 people where we now want 100. Loosen it to k=5 instead and 53
+> statements we refused would have passed. That's the entire decision history
+> re-decided, and it comes back instantly."
+
+The reverse direction reads just as well, and is a good one to have ready if a
+judge asks:
+
+```bash
+uv run python -m airlock.replay --set write-blast-radius=100   # 8 more writes held
+uv run python -m airlock.replay --disable no-raw-pii-phone     # 18 refusals undone
+```
+
+> "Replay works because the policy decision is a pure function and the ledger
+> already stores what it needs. We never re-run the agent's SQL, and we never
+> touch the customer tables."
 
 ## 2:55 — Close (5s)
 
@@ -59,6 +83,19 @@ Tighten `acctbal-k-anon` from k=20 to k=100. Replay the full ledger.
 > autonomous agent with another autonomous agent."
 
 ---
+
+## Before recording
+
+Generate a decision history worth replaying — a fresh ledger has nothing to
+diff:
+
+```bash
+uv run python -m airlock.traffic --count 400
+```
+
+Every statement goes through the real gateway, so the ledger is evidence rather
+than fixture data. The numbers quoted above are from `--count 400 --seed 7`;
+re-run the replay commands and use whatever you actually get.
 
 ## Recording notes
 

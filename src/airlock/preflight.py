@@ -53,6 +53,31 @@ def build_probe(sql: str) -> str | None:
     return None
 
 
+def build_group_probe(sql: str) -> str | None:
+    """Rewrite an aggregate query into the size of its smallest group.
+
+    k-anonymity is a claim about how many people hide behind each published
+    number, so it can only be enforced against a *measured* group size. We keep
+    the query's FROM, WHERE, GROUP BY and HAVING -- the shape that determines the
+    grouping -- throw its projections away, and count. Same argument as the blast
+    radius: on a columnar engine this is affordable on the hot path.
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read="postgres")
+    except Exception:
+        return None
+    if not isinstance(tree, exp.Select):
+        return None
+
+    inner = tree.copy()
+    inner.set("expressions", [exp.alias_(exp.Count(this=exp.Star()), "GRP_N")])
+    # These narrow what is displayed, not how rows are grouped.
+    for clause in ("order", "limit", "offset", "distinct"):
+        inner.set(clause, None)
+
+    return f"SELECT MIN(GRP_N) AS MIN_GROUP FROM ({inner.sql(dialect='postgres')})"
+
+
 def build_rollback(sql: str, features: Features, snapshot_table: str) -> str | None:
     """Compensating statement that reverses the write.
 

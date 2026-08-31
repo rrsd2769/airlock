@@ -24,9 +24,13 @@ SCENARIOS: list[tuple[str, str]] = [
     ("Balance requested raw, not aggregated (k-anonymity)",
      "SELECT C_CUSTKEY, C_ACCTBAL FROM TPCH.CUSTOMER ORDER BY C_ACCTBAL DESC LIMIT 5"),
 
-    ("Same column, but properly aggregated",
-     "SELECT C_NATIONKEY, AVG(C_ACCTBAL) AS AVG_BAL, COUNT(*) AS N "
-     "FROM TPCH.CUSTOMER GROUP BY C_NATIONKEY"),
+    ("Same column, aggregated into groups large enough to hide in",
+     "SELECT C_MKTSEGMENT, AVG(C_ACCTBAL) AS AVG_BAL, COUNT(*) AS N "
+     "FROM TPCH.CUSTOMER GROUP BY C_MKTSEGMENT"),
+
+    ("Aggregated, but sliced until the groups are too small to hide in",
+     "SELECT C_NATIONKEY, C_MKTSEGMENT, AVG(C_ACCTBAL) AS AVG_BAL "
+     "FROM TPCH.CUSTOMER GROUP BY C_NATIONKEY, C_MKTSEGMENT"),
 
     ("A write whose blast radius is small",
      "UPDATE TPCH.CUSTOMER SET C_COMMENT = 'reviewed' WHERE C_CUSTKEY = 1"),
@@ -55,6 +59,8 @@ def main() -> None:
         print(f"     {result.reason}")
         if result.affected_rows is not None:
             print(f"     measured blast radius: {result.affected_rows} rows")
+        if result.min_group is not None:
+            print(f"     measured smallest group: {result.min_group} rows")
         if result.rows:
             print(f"     returned {len(result.rows)} rows")
 

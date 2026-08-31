@@ -33,13 +33,39 @@ def test_unrelated_query_is_allowed():
     assert d.effect == ALLOW
 
 
-def test_k_anonymity_blocks_raw_but_allows_aggregate():
-    p = [policy(RULE_KIND="MIN_AGGREGATION", TARGET_SCHEMA="TPCH",
-                TARGET_TABLE="CUSTOMER", TARGET_COLUMN="C_ACCTBAL", THRESHOLD=20)]
+K_ANON = dict(RULE_KIND="MIN_AGGREGATION", TARGET_SCHEMA="TPCH",
+              TARGET_TABLE="CUSTOMER", TARGET_COLUMN="C_ACCTBAL", THRESHOLD=20)
+AGGREGATE = "SELECT AVG(C_ACCTBAL) FROM TPCH.CUSTOMER GROUP BY C_NATIONKEY"
+
+
+def test_k_anonymity_blocks_raw_but_allows_a_large_enough_aggregate():
+    p = [policy(**K_ANON)]
     raw = evaluate(analyze("SELECT C_ACCTBAL FROM TPCH.CUSTOMER"), p)
-    agg = evaluate(analyze("SELECT AVG(C_ACCTBAL) FROM TPCH.CUSTOMER GROUP BY C_NATIONKEY"), p)
+    agg = evaluate(analyze(AGGREGATE), p, min_group=94)
     assert raw.effect == DENY
     assert agg.effect == ALLOW
+
+
+def test_k_anonymity_blocks_an_aggregate_whose_groups_are_too_small():
+    """Aggregating is not the same as being anonymous: it is the group size
+    that hides the individual, so the group size is what gets measured."""
+    p = [policy(**K_ANON)]
+    d = evaluate(analyze(AGGREGATE), p, min_group=10)
+    assert d.effect == DENY
+    assert "smallest group is 10 rows" in d.reason_text
+
+
+def test_the_same_aggregate_flips_when_k_moves():
+    """The k in the policy row is load-bearing -- this is what replay diffs."""
+    q = analyze(AGGREGATE)
+    assert evaluate(q, [policy(**{**K_ANON, "THRESHOLD": 20})], min_group=94).effect == ALLOW
+    assert evaluate(q, [policy(**{**K_ANON, "THRESHOLD": 100})], min_group=94).effect == DENY
+
+
+def test_unmeasured_group_size_is_not_waved_through():
+    p = [policy(**K_ANON)]
+    d = evaluate(analyze(AGGREGATE), p, min_group=None)
+    assert d.effect == REQUIRE_APPROVAL
 
 
 def test_blast_radius_holds_large_writes():

@@ -18,12 +18,21 @@ from .analyze import analyze
 from .config import settings
 
 
+def _needs_group_measurement(features, policies: list[dict]) -> bool:
+    """True when some k-anonymity rule applies to this aggregate query."""
+    if not features.has_aggregate:
+        return False
+    return any(p["RULE_KIND"] == "MIN_AGGREGATION" and policy._touches_column(features, p)
+               for p in policies)
+
+
 @dataclass
 class GatewayResult:
     decision: str
     reason: str
     seq: int
     affected_rows: int | None = None
+    min_group: int | None = None
     rows: list[dict[str, Any]] | None = None
     truncated: bool = False
     rollback_sql: str | None = None
@@ -60,11 +69,18 @@ class Airlock:
 
         affected = None
         rollback = None
+        min_group = None
         if decision.effect != policy.DENY and features.kind in {"UPDATE", "DELETE",
                                                                 "INSERT", "MERGE"}:
             affected, rollback = self._measure_blast_radius(sql, features)
             # Second pass, now that the radius is a measured fact.
             decision = policy.evaluate(features, policies, affected_rows=affected)
+        elif decision.effect != policy.DENY and features.kind == "SELECT":
+            # k-anonymity is a claim about group sizes, so measure them rather
+            # than trusting that an aggregate is automatically anonymous.
+            if _needs_group_measurement(features, policies):
+                min_group = self._measure_min_group(sql)
+                decision = policy.evaluate(features, policies, min_group=min_group)
 
         elapsed = (time.perf_counter() - started) * 1000
         entry = ledger.append(
@@ -78,6 +94,7 @@ class Airlock:
             matched_policies=decision.matched_csv,
             reason=decision.reason_text,
             est_rows=affected,
+            min_group=min_group,
             rollback_sql=rollback,
             taint_max=None,
             latency_ms=elapsed,
@@ -86,7 +103,7 @@ class Airlock:
         if decision.effect != policy.ALLOW:
             return GatewayResult(decision=decision.effect, reason=decision.reason_text,
                                  seq=entry.seq, affected_rows=affected,
-                                 rollback_sql=rollback)
+                                 min_group=min_group, rollback_sql=rollback)
 
         stmt = self.conn.execute(sql)
 
@@ -94,13 +111,27 @@ class Airlock:
         if features.kind != "SELECT":
             return GatewayResult(decision=policy.ALLOW, reason=decision.reason_text,
                                  seq=entry.seq, affected_rows=stmt.rowcount(),
-                                 rollback_sql=rollback)
+                                 min_group=min_group, rollback_sql=rollback)
 
         rows = stmt.fetchmany(max_rows + 1)
         truncated = len(rows) > max_rows
         return GatewayResult(decision=policy.ALLOW, reason=decision.reason_text,
                              seq=entry.seq, rows=rows[:max_rows], truncated=truncated,
-                             affected_rows=affected, rollback_sql=rollback)
+                             affected_rows=affected, min_group=min_group,
+                             rollback_sql=rollback)
+
+    def _measure_min_group(self, sql: str) -> int | None:
+        probe = preflight.build_group_probe(sql)
+        if probe is None:
+            return None
+        try:
+            row = self.conn.execute(probe).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        value = next(iter(row.values()))
+        return int(value) if value is not None else None
 
     def _measure_blast_radius(self, sql: str, features) -> tuple[int | None, str | None]:
         probe = preflight.build_probe(sql)
