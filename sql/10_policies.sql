@@ -32,4 +32,9 @@ INSERT INTO POLICY (NAME, RULE_KIND, EFFECT, THRESHOLD, NOTE)
 VALUES ('block-tainted-rows', 'TAINT_BLOCK', 'DENY', 0.7,
         'Result sets containing prompt-injection payloads are withheld.');
 
+-- 6. The airlock's own schema is never reachable by the traffic it governs.
+INSERT INTO POLICY (NAME, RULE_KIND, EFFECT, TARGET_SCHEMA, NOTE)
+VALUES ('protect-airlock', 'SCHEMA_DENY', 'DENY', 'AIRLOCK',
+        'An agent must not be able to edit the policies or erase the ledger that bind it.');
+
 COMMIT;

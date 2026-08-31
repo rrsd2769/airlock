@@ -38,11 +38,16 @@ class Airlock:
         self._register_session()
 
     def _register_session(self) -> None:
+        existing = self.conn.execute(
+            "SELECT SESSION_ID FROM AIRLOCK.AGENT_SESSION WHERE SESSION_ID = {sid}",
+            {"sid": self.session_id},
+        ).fetchone()
+        if existing:
+            return
         self.conn.execute(
-            "MERGE INTO AIRLOCK.AGENT_SESSION t USING (SELECT ? AS SID, ? AS P) s "
-            "ON (t.SESSION_ID = s.SID) "
-            "WHEN NOT MATCHED THEN INSERT (SESSION_ID, PRINCIPAL) VALUES (s.SID, s.P)",
-            [self.session_id, self.principal],
+            "INSERT INTO AIRLOCK.AGENT_SESSION (SESSION_ID, PRINCIPAL) "
+            "VALUES ({sid}, {principal})",
+            {"sid": self.session_id, "principal": self.principal},
         )
 
     def submit(self, sql: str, max_rows: int = 200) -> GatewayResult:
@@ -83,7 +88,15 @@ class Airlock:
                                  seq=entry.seq, affected_rows=affected,
                                  rollback_sql=rollback)
 
-        rows = self.conn.execute(sql).fetchmany(max_rows + 1)
+        stmt = self.conn.execute(sql)
+
+        # Only queries produce a result set; a write reports its row count.
+        if features.kind != "SELECT":
+            return GatewayResult(decision=policy.ALLOW, reason=decision.reason_text,
+                                 seq=entry.seq, affected_rows=stmt.rowcount(),
+                                 rollback_sql=rollback)
+
+        rows = stmt.fetchmany(max_rows + 1)
         truncated = len(rows) > max_rows
         return GatewayResult(decision=policy.ALLOW, reason=decision.reason_text,
                              seq=entry.seq, rows=rows[:max_rows], truncated=truncated,

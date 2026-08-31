@@ -48,11 +48,11 @@ def load_policies(conn: pyexasol.ExaConnection, principal: str) -> list[dict]:
         SELECT POLICY_ID, NAME, RULE_KIND, EFFECT, TARGET_SCHEMA, TARGET_TABLE,
                TARGET_COLUMN, PRINCIPAL, THRESHOLD, NOTE
         FROM AIRLOCK.POLICY
-        WHERE ENABLED = TRUE
-          AND (PRINCIPAL IS NULL OR PRINCIPAL = ?)
+        WHERE IS_ENABLED = TRUE
+          AND (PRINCIPAL IS NULL OR PRINCIPAL = {principal})
         ORDER BY POLICY_ID
         """,
-        [principal],
+        {"principal": principal},
     ).fetchall()
 
 
@@ -83,14 +83,22 @@ def evaluate(features: Features, policies: list[dict], *,
     for p in policies:
         kind = p["RULE_KIND"]
 
-        if kind == "COLUMN_ACCESS":
+        if kind == "SCHEMA_DENY":
+            if p["TARGET_SCHEMA"] in features.schemas:
+                d.apply(p["EFFECT"],
+                        f"{p['NAME']}: {p['TARGET_SCHEMA']} is not reachable by an agent",
+                        p["POLICY_ID"])
+
+        elif kind == "COLUMN_ACCESS":
             if _touches_column(features, p):
                 d.apply(p["EFFECT"],
                         f"{p['NAME']}: {p['TARGET_COLUMN']} is not readable by an agent",
                         p["POLICY_ID"])
 
         elif kind == "MIN_AGGREGATION":
-            if _touches_column(features, p):
+            # k-anonymity governs what an agent can *see*, so it applies to
+            # projections, not to a predicate in a write's WHERE clause.
+            if features.kind == "SELECT" and _touches_column(features, p):
                 if not features.has_aggregate:
                     d.apply(p["EFFECT"],
                             f"{p['NAME']}: {p['TARGET_COLUMN']} is aggregate-only "
@@ -116,6 +124,11 @@ def evaluate(features: Features, policies: list[dict], *,
                         f"{p['NAME']}: result set contains injected instructions "
                         f"(taint {taint_max:.2f})",
                         p["POLICY_ID"])
+
+    # Self-protection is structural, not merely a policy row: an agent must not
+    # be able to erase its own audit trail by deleting the policy that stops it.
+    if "AIRLOCK" in features.schemas:
+        d.apply(DENY, "AIRLOCK's own schema is never reachable through the airlock", 0)
 
     # DDL from an agent is never in scope for this gateway.
     if features.kind in {"CREATE", "DROP", "ALTER", "TRUNCATE", "OTHER"}:

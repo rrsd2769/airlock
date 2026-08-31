@@ -76,8 +76,8 @@ def explain_refusal(ledger_seq: int) -> str:
     """Explain why a specific statement was refused, by ledger sequence number."""
     conn = _gate().conn
     row = conn.execute(
-        "SELECT SEQ, DECISION, REASON, MATCHED_POLICIES, STATEMENT "
-        "FROM AIRLOCK.LEDGER WHERE SEQ = ?", [ledger_seq]
+        "SELECT SEQ, DECISION, REASON, MATCHED_POLICIES, STMT_TEXT "
+        "FROM AIRLOCK.LEDGER WHERE SEQ = {seq}", {"seq": ledger_seq}
     ).fetchone()
     return json.dumps(row, default=str)
 

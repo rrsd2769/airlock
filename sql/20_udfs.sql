@@ -1,91 +1,99 @@
--- In-database logic. Requires: exasol slc install python3
+-- In-database logic for AIRLOCK.
+--
+-- Deliberately free of any script language container. Ledger verification is
+-- pure SQL (Exasol's native HASH_SHA256 plus a LAG window), and the two scripts
+-- are Lua, which is compiled into Exasol itself. Nothing here needs a download,
+-- and Lua's sub-10ms startup keeps the governance path cheap enough to sit in
+-- front of every statement.
+
 OPEN SCHEMA AIRLOCK;
 
 -------------------------------------------------------------------------------
--- LEDGER_VERIFY: walks the hash chain in sequence order and recomputes every
--- entry hash. Emits only the rows where the chain is broken. Runs where the
--- data lives -- the ledger never leaves the database to be audited.
+-- LEDGER_CHECK: recompute every entry hash and every chain link, in SQL.
+-- Must stay byte-identical to airlock.ledger.entry_hash in Python.
 -------------------------------------------------------------------------------
-CREATE OR REPLACE PYTHON3 SET SCRIPT LEDGER_VERIFY(
-    SEQ DECIMAL(18,0),
-    SESSION_ID VARCHAR(64),
-    TS VARCHAR(64),
-    STATEMENT VARCHAR(2000000),
-    DECISION VARCHAR(20),
-    PREV_HASH CHAR(64),
-    ENTRY_HASH CHAR(64)
-) EMITS (BAD_SEQ DECIMAL(18,0), PROBLEM VARCHAR(200), EXPECTED CHAR(64), FOUND CHAR(64)) AS
-import hashlib
-
-GENESIS = '0' * 64
-
-def entry_hash(seq, session_id, ts, statement, decision, prev_hash):
-    payload = '|'.join([
-        str(int(seq)), session_id or '', ts or '',
-        statement or '', decision or '', prev_hash or '',
-    ])
-    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
-
-def run(ctx):
-    expected_prev = GENESIS
-    while True:
-        # chain linkage
-        if (ctx.PREV_HASH or '') != expected_prev:
-            ctx.emit(ctx.SEQ, 'prev_hash does not match preceding entry',
-                     expected_prev, ctx.PREV_HASH)
-        # content integrity
-        recomputed = entry_hash(ctx.SEQ, ctx.SESSION_ID, ctx.TS,
-                                ctx.STATEMENT, ctx.DECISION, ctx.PREV_HASH)
-        if recomputed != (ctx.ENTRY_HASH or ''):
-            ctx.emit(ctx.SEQ, 'entry was modified after it was written',
-                     recomputed, ctx.ENTRY_HASH)
-        expected_prev = ctx.ENTRY_HASH
-        if not ctx.next():
-            break
-/
+CREATE OR REPLACE VIEW LEDGER_CHECK AS
+SELECT
+    SEQ,
+    SESSION_ID,
+    DECISION,
+    PREV_HASH,
+    ENTRY_HASH,
+    NVL(LAG(ENTRY_HASH) OVER (ORDER BY SEQ),
+        '0000000000000000000000000000000000000000000000000000000000000000'
+    ) AS EXPECTED_PREV,
+    LOWER(TO_CHAR(HASH_SHA256(
+        SEQ
+        || '|' || NVL(SESSION_ID, '')
+        || '|' || TO_CHAR(TS, 'YYYY-MM-DD HH24:MI:SS.FF6')
+        || '|' || NVL(STMT_TEXT, '')
+        || '|' || NVL(DECISION, '')
+        || '|' || NVL(PREV_HASH, '')
+    ))) AS RECOMPUTED
+FROM LEDGER;
 
 -------------------------------------------------------------------------------
--- SCAN_TAINT: the data-side of prompt injection. Sweeps free-text columns in
--- parallel across the cluster and scores rows that carry instructions aimed at
--- whatever model reads them later. Everyone scans the prompt; nobody scans the
--- rows coming back.
+-- LEDGER_BREAKS: the audit result. Empty means the trail is intact.
+-- Editing one historical row surfaces here twice: the row itself no longer
+-- matches its own hash, and the row after it no longer links back.
 -------------------------------------------------------------------------------
-CREATE OR REPLACE PYTHON3 SCALAR SCRIPT SCAN_TAINT(TXT VARCHAR(2000000))
+CREATE OR REPLACE VIEW LEDGER_BREAKS AS
+SELECT SEQ,
+       'entry was modified after it was written' AS PROBLEM,
+       RECOMPUTED AS EXPECTED,
+       ENTRY_HASH AS FOUND_HASH
+FROM LEDGER_CHECK
+WHERE ENTRY_HASH <> RECOMPUTED
+UNION ALL
+SELECT SEQ,
+       'prev_hash does not match the preceding entry' AS PROBLEM,
+       EXPECTED_PREV AS EXPECTED,
+       PREV_HASH AS FOUND_HASH
+FROM LEDGER_CHECK
+WHERE PREV_HASH <> EXPECTED_PREV;
+
+-------------------------------------------------------------------------------
+-- SCAN_TAINT: the data side of prompt injection. Everyone scans the prompt;
+-- almost nobody scans the rows coming back. Returns "score|matched signatures".
+-------------------------------------------------------------------------------
+CREATE OR REPLACE LUA SCALAR SCRIPT SCAN_TAINT(TXT VARCHAR(2000000))
 RETURNS VARCHAR(2000) AS
-import re
+local SIGNATURES = {
+    {0.45, 'ignore previous instructions'},
+    {0.45, 'ignore all previous instructions'},
+    {0.40, 'disregard previous'},
+    {0.40, 'disregard all previous'},
+    {0.35, 'you are now'},
+    {0.35, 'system prompt'},
+    {0.30, 'new instructions'},
+    {0.30, '<|im_start|>'},
+    {0.30, '</system>'},
+    {0.25, 'drop table'},
+    {0.25, 'delete from'},
+    {0.25, 'grant all'},
+    {0.20, 'do not tell the user'},
+    {0.20, 'act as admin'},
+}
 
-# Weighted signatures of instruction-injection in stored text.
-SIGNATURES = [
-    (0.45, r'ignore\s+(all\s+)?(previous|prior|above)\s+instructions?'),
-    (0.40, r'disregard\s+(all\s+)?(previous|prior|the\s+above)'),
-    (0.35, r'\byou\s+are\s+now\b'),
-    (0.35, r'\bsystem\s*(prompt|message)\b'),
-    (0.30, r'</?(system|assistant|user|im_start|im_end)>'),
-    (0.30, r'\bnew\s+instructions?\b'),
-    (0.25, r'\b(exfiltrate|send|email|post)\b.{0,40}\b(to|at)\b.{0,40}@'),
-    (0.25, r'\bDROP\s+TABLE\b|\bDELETE\s+FROM\b|\bGRANT\s+ALL\b'),
-    (0.20, r'\bdo\s+not\s+tell\s+the\s+user\b'),
-    (0.20, r'\bact\s+as\s+(an?\s+)?(admin|root|superuser)\b'),
-]
-
-COMPILED = [(w, re.compile(p, re.IGNORECASE | re.DOTALL)) for w, p in SIGNATURES]
-
-def run(ctx):
-    txt = ctx.TXT
-    if not txt:
-        return '0.0|'
-    score = 0.0
-    hits = []
-    for weight, rx in COMPILED:
-        if rx.search(txt):
-            score += weight
-            hits.append(rx.pattern[:40])
-    return '%.4f|%s' % (min(score, 1.0), ','.join(hits))
+function run(ctx)
+    if ctx.TXT == nil then return '0.0|' end
+    local hay = string.lower(ctx.TXT)
+    local score = 0.0
+    local hits = {}
+    for i = 1, #SIGNATURES do
+        local weight, needle = SIGNATURES[i][1], SIGNATURES[i][2]
+        if string.find(hay, needle, 1, true) ~= nil then
+            score = score + weight
+            table.insert(hits, needle)
+        end
+    end
+    if score > 1.0 then score = 1.0 end
+    return string.format('%.4f|%s', score, table.concat(hits, ','))
+end
 /
 
 -------------------------------------------------------------------------------
--- STMT_KIND: cheap Lua classifier. Lua is compiled into Exasol -- no container,
--- sub-10ms startup -- so this sits on the hot path without costing anything.
+-- STMT_KIND: cheap statement classifier on the hot path.
 -------------------------------------------------------------------------------
 CREATE OR REPLACE LUA SCALAR SCRIPT STMT_KIND(STMT VARCHAR(2000000))
 RETURNS VARCHAR(20) AS
@@ -93,10 +101,10 @@ function run(ctx)
     if ctx.STMT == nil then return 'OTHER' end
     local s = string.upper(string.gsub(ctx.STMT, '^%s+', ''))
     if     string.find(s, '^SELECT') or string.find(s, '^WITH') then return 'SELECT'
-    elseif string.find(s, '^INSERT') then return 'INSERT'
-    elseif string.find(s, '^UPDATE') then return 'UPDATE'
-    elseif string.find(s, '^DELETE') then return 'DELETE'
-    elseif string.find(s, '^MERGE')  then return 'MERGE'
+    elseif string.find(s, '^INSERT')   then return 'INSERT'
+    elseif string.find(s, '^UPDATE')   then return 'UPDATE'
+    elseif string.find(s, '^DELETE')   then return 'DELETE'
+    elseif string.find(s, '^MERGE')    then return 'MERGE'
     elseif string.find(s, '^TRUNCATE') or string.find(s, '^DROP')
         or string.find(s, '^ALTER')    or string.find(s, '^CREATE') then return 'DDL'
     end

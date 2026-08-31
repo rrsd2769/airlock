@@ -43,8 +43,10 @@ columns across the warehouse and scores rows carrying instructions aimed at
 whatever model reads them next. Result sets containing tainted rows are withheld.
 
 **4. Tamper-evident ledger + replay.** Every decision is hash-chained to the one
-before it. `LEDGER_VERIFY` walks the chain inside the database, so the audit
-trail never has to leave to be trusted. Then: change a policy and replay the
+before it. Verification is a single analytical query — Exasol's native
+`HASH_SHA256` recomputes each entry and a `LAG` window re-links the chain — so
+the audit trail never has to leave the database to be trusted, and needs no
+script language container at all. Then: change a policy and replay the
 whole ledger against the new version — *"this change would have blocked 34
 previously-allowed queries and unblocked 6"* — answered as an analytical scan.
 
@@ -65,9 +67,10 @@ previously-allowed queries and unblocked 6"* — answered as an analytical scan.
 │   AIRLOCK.POLICY    declarative rules       │
 │   AIRLOCK.LEDGER    hash-chained decisions  │
 │   AIRLOCK.TAINT     injection sweep results │
-│   LEDGER_VERIFY()   PYTHON3 SET  UDF        │
-│   SCAN_TAINT()      PYTHON3 SCALAR UDF      │
-│   STMT_KIND()       LUA SCALAR   UDF        │
+│   LEDGER_CHECK      SQL view: HASH_SHA256   │
+│   LEDGER_BREAKS     SQL view: audit result  │
+│   SCAN_TAINT()      LUA SCALAR script       │
+│   STMT_KIND()       LUA SCALAR script       │
 │   TPCH / ENERGY     the data being guarded  │
 └─────────────────────────────────────────────┘
 ```
@@ -78,8 +81,12 @@ Requires [Exasol Personal](https://github.com/exasol/exasol-personal) running lo
 
 ```bash
 curl https://www.exasol.com/install/starter-kit.sh | sh   # database + sample data
-./scripts/bootstrap.sh                                    # schema, UDFs, policies
+./scripts/bootstrap.sh                                    # schema, scripts, policies
+uv run python -m airlock.demo                             # see what it stops
 ```
+
+No script language container is required: the in-database logic is SQL and Lua,
+and Lua is compiled into Exasol itself.
 
 ## Repository layout
 
@@ -87,7 +94,7 @@ curl https://www.exasol.com/install/starter-kit.sh | sh   # database + sample da
 |---|---|
 | `sql/00_schema.sql` | Policy, ledger, taint, session tables |
 | `sql/10_policies.sql` | The seed policy set the demo argues about |
-| `sql/20_udfs.sql` | `LEDGER_VERIFY`, `SCAN_TAINT`, `STMT_KIND` |
+| `sql/20_udfs.sql` | Chain-verification views + Lua scripts (no container needed) |
 | `src/airlock/analyze.py` | SQL → policy-relevant features (sqlglot) |
 | `src/airlock/policy.py` | Pure decision function, reused by replay |
 | `src/airlock/preflight.py` | Blast-radius probe + rollback synthesis |

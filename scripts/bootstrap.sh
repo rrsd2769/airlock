@@ -28,15 +28,8 @@ except Exception as exc:
              "    Start it with: exasol start")
 PY
 
-step "Checking the PYTHON3 script language container"
-if ! exasol slc list 2>/dev/null | grep -qE 'python-3.*yes'; then
-    echo "    PYTHON3 SLC is not installed. UDFs will fail without it."
-    echo "    Install it with: exasol slc install python3 --auto-approve"
-    echo "    (run that in a terminal you leave open; killing it mid-start"
-    echo "     corrupts the VM filesystem)"
-    exit 1
-fi
-echo "    installed"
+step "Checking Lua scripting"
+echo "    Lua is compiled into Exasol; no script language container is needed."
 
 step "Creating schema, UDFs, and policies"
 uv run python scripts/apply_sql.py sql/00_schema.sql sql/20_udfs.sql sql/10_policies.sql

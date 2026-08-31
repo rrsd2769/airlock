@@ -58,28 +58,36 @@ def append(conn: pyexasol.ExaConnection, *, session_id: str, principal: str,
     conn.execute(
         """
         INSERT INTO AIRLOCK.LEDGER
-            (SEQ, SESSION_ID, TS, PRINCIPAL, STMT_KIND, STATEMENT, FEATURES,
+            (SEQ, SESSION_ID, TS, PRINCIPAL, STMT_KIND, STMT_TEXT, FEATURES,
              DECISION, MATCHED_POLICIES, REASON, EST_ROWS, ROLLBACK_SQL,
              TAINT_MAX, LATENCY_MS, PREV_HASH, ENTRY_HASH)
-        VALUES (?, ?, TO_TIMESTAMP(?, 'YYYY-MM-DD HH24:MI:SS.FF6'), ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ({seq}, {session_id},
+                TO_TIMESTAMP({ts}, 'YYYY-MM-DD HH24:MI:SS.FF6'),
+                {principal}, {stmt_kind}, {stmt_text}, {features},
+                {decision}, {matched}, {reason}, {est_rows}, {rollback_sql},
+                {taint_max}, {latency_ms}, {prev_hash}, {entry_hash})
         """,
-        [seq, session_id, ts, principal, stmt_kind, statement, features_json,
-         decision, matched_policies, reason, est_rows, rollback_sql,
-         taint_max, latency_ms, prev_hash, digest],
+        {
+            "seq": seq, "session_id": session_id, "ts": ts,
+            "principal": principal, "stmt_kind": stmt_kind,
+            "stmt_text": statement, "features": features_json,
+            "decision": decision, "matched": matched_policies,
+            "reason": reason, "est_rows": est_rows,
+            "rollback_sql": rollback_sql, "taint_max": taint_max,
+            "latency_ms": latency_ms, "prev_hash": prev_hash,
+            "entry_hash": digest,
+        },
     )
     return LedgerEntry(seq=seq, ts=ts, entry_hash=digest, prev_hash=prev_hash)
 
 
 def verify(conn: pyexasol.ExaConnection) -> list[dict[str, Any]]:
-    """Run the in-database chain check. An empty list means the ledger is intact."""
+    """Run the chain check. An empty list means the ledger is intact.
+
+    This is a plain analytical query, not a UDF: Exasol's native HASH_SHA256
+    recomputes each entry and a LAG window re-links the chain. No script
+    language container is involved, so the audit works on a bare deployment.
+    """
     return conn.execute(
-        """
-        SELECT AIRLOCK.LEDGER_VERIFY(
-                   SEQ, SESSION_ID,
-                   TO_CHAR(TS, 'YYYY-MM-DD HH24:MI:SS.FF6'),
-                   STATEMENT, DECISION, PREV_HASH, ENTRY_HASH
-               ORDER BY SEQ)
-        FROM AIRLOCK.LEDGER
-        """
+        "SELECT SEQ, PROBLEM, EXPECTED, FOUND_HASH FROM AIRLOCK.LEDGER_BREAKS ORDER BY SEQ"
     ).fetchall()

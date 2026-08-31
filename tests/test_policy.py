@@ -68,3 +68,17 @@ def test_unparseable_statement_is_denied_by_default():
 
 def test_ddl_never_passes_the_airlock():
     assert evaluate(analyze("DROP TABLE TPCH.CUSTOMER"), []).effect == DENY
+
+
+def test_agent_cannot_erase_its_own_audit_trail():
+    """The airlock must survive the traffic it governs, even with no policies."""
+    assert evaluate(analyze("DELETE FROM AIRLOCK.LEDGER"), []).effect == DENY
+    assert evaluate(analyze("SELECT * FROM AIRLOCK.POLICY"), []).effect == DENY
+    assert evaluate(analyze("UPDATE AIRLOCK.POLICY SET IS_ENABLED = FALSE"), []).effect == DENY
+
+
+def test_k_anonymity_does_not_fire_on_a_write_predicate():
+    p = [policy(RULE_KIND="MIN_AGGREGATION", TARGET_SCHEMA="TPCH",
+                TARGET_TABLE="CUSTOMER", TARGET_COLUMN="C_ACCTBAL", THRESHOLD=20)]
+    f = analyze("UPDATE TPCH.CUSTOMER SET C_COMMENT = 'x' WHERE C_ACCTBAL > 0")
+    assert evaluate(f, p, affected_rows=10).effect == ALLOW

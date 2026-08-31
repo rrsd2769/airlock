@@ -12,8 +12,8 @@ OPEN SCHEMA AIRLOCK;
 CREATE OR REPLACE TABLE POLICY (
     POLICY_ID       DECIMAL(18,0) IDENTITY,
     NAME            VARCHAR(200)   NOT NULL,
-    VERSION         DECIMAL(9,0)   NOT NULL DEFAULT 1,
-    ENABLED         BOOLEAN        NOT NULL DEFAULT TRUE,
+    VERSION         DECIMAL(9,0)   DEFAULT 1 NOT NULL,
+    IS_ENABLED      BOOLEAN        DEFAULT TRUE NOT NULL,
     -- COLUMN_ACCESS | MIN_AGGREGATION | BLAST_RADIUS | SCHEMA_SCOPE | TAINT_BLOCK
     RULE_KIND       VARCHAR(40)    NOT NULL,
     EFFECT          VARCHAR(20)    NOT NULL,   -- ALLOW | DENY | REQUIRE_APPROVAL
@@ -39,7 +39,7 @@ CREATE OR REPLACE TABLE AGENT_SESSION (
 
 -------------------------------------------------------------------------------
 -- LEDGER: hash-chained, append-only record of every decision.
--- ENTRY_HASH = sha256(SEQ || SESSION_ID || TS || STATEMENT || DECISION || PREV_HASH)
+-- ENTRY_HASH = sha256(SEQ || SESSION_ID || TS || STMT_TEXT || DECISION || PREV_HASH)
 -- Any edit to a historical row breaks every hash after it.
 -------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LEDGER (
@@ -48,7 +48,7 @@ CREATE OR REPLACE TABLE LEDGER (
     TS                  TIMESTAMP      NOT NULL,
     PRINCIPAL           VARCHAR(128),
     STMT_KIND           VARCHAR(20),          -- SELECT | UPDATE | DELETE | INSERT | DDL | OTHER
-    STATEMENT           VARCHAR(2000000),
+    STMT_TEXT           VARCHAR(2000000),
     FEATURES            VARCHAR(2000000),     -- JSON: tables, columns, joins, aggregates
     DECISION            VARCHAR(20)    NOT NULL,  -- ALLOW | DENY | REQUIRE_APPROVAL
     MATCHED_POLICIES    VARCHAR(2000),        -- csv of POLICY_ID

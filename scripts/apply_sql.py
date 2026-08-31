@@ -1,14 +1,21 @@
 """Apply a .sql file to Exasol via pyexasol.
 
-Why not `exasol connect -f`: that client splits input on ';', which corrupts
-UDF bodies. Exasol script definitions are instead terminated by a line
-containing a single '/'. A file uses one convention or the other, never both,
-so detect which and split accordingly.
+Splitting Exasol SQL is not a one-liner:
+
+  * `exasol connect -f` splits on ';', which corrupts script bodies.
+  * ';' also appears inside string literals and comments, so a naive split
+    tears statements in half.
+  * A single file may mix ';'-terminated statements with script definitions,
+    which are terminated by a line containing only '/'.
+
+So: lift script blocks out first, then scan the remainder for ';' while
+tracking string literals and both comment styles.
 
     python scripts/apply_sql.py sql/00_schema.sql [...]
 """
 from __future__ import annotations
 
+import re
 import ssl
 import sys
 from pathlib import Path
@@ -16,6 +23,12 @@ from pathlib import Path
 import pyexasol
 
 PW_FILE = Path.home() / ".exasol-starter-kit/credentials/personal_sys_password"
+
+SCRIPT_START = re.compile(
+    r"^\s*CREATE\s+(OR\s+REPLACE\s+)?"
+    r"(LUA|PYTHON3?|PYTHON312|JAVA|JAVA17|R|R44)\b.*\bSCRIPT\b",
+    re.IGNORECASE,
+)
 
 
 def connect() -> pyexasol.ExaConnection:
@@ -26,31 +39,94 @@ def connect() -> pyexasol.ExaConnection:
     )
 
 
-def split_statements(text: str) -> list[str]:
-    lines = text.splitlines()
-    uses_script_terminator = any(line.strip() == "/" for line in lines)
+def _split_plain(sql: str) -> list[str]:
+    """Split on ';' that are real statement terminators."""
+    out, buf = [], []
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < n else ""
 
-    if uses_script_terminator:
-        statements, buf = [], []
-        for line in lines:
+        if ch == "'":                                  # string literal, '' escapes
+            buf.append(ch)
+            i += 1
+            while i < n:
+                buf.append(sql[i])
+                if sql[i] == "'":
+                    if i + 1 < n and sql[i + 1] == "'":
+                        buf.append(sql[i + 1])
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        if ch == "-" and nxt == "-":                   # line comment
+            while i < n and sql[i] != "\n":
+                buf.append(sql[i])
+                i += 1
+            continue
+
+        if ch == "/" and nxt == "*":                   # block comment
+            while i < n and not (sql[i] == "*" and i + 1 < n and sql[i + 1] == "/"):
+                buf.append(sql[i])
+                i += 1
+            buf.append(sql[i:i + 2])
+            i += 2
+            continue
+
+        if ch == ";":
+            out.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+
+        buf.append(ch)
+        i += 1
+
+    out.append("".join(buf))
+    return out
+
+
+def split_statements(text: str) -> list[str]:
+    statements: list[str] = []
+    pending: list[str] = []
+    script: list[str] | None = None
+
+    for line in text.splitlines():
+        if script is not None:
             if line.strip() == "/":
-                statements.append("\n".join(buf))
-                buf = []
+                statements.append("\n".join(script))
+                script = None
             else:
-                buf.append(line)
-        if "\n".join(buf).strip():
-            statements.append("\n".join(buf))
-    else:
-        statements = text.split(";")
+                script.append(line)
+            continue
+
+        if SCRIPT_START.match(line):
+            statements.extend(_split_plain("\n".join(pending)))
+            pending = []
+            script = [line]
+            continue
+
+        pending.append(line)
+
+    if script:
+        statements.append("\n".join(script))
+    statements.extend(_split_plain("\n".join(pending)))
 
     out = []
     for stmt in statements:
-        # Drop statements that are only comments or blank.
         meaningful = [ln for ln in stmt.splitlines()
                       if ln.strip() and not ln.strip().startswith("--")]
         if meaningful:
             out.append(stmt.strip())
     return out
+
+
+def _error_text(exc: Exception) -> str:
+    msg = " ".join(str(exc).split())
+    return msg[:220] if msg else f"{type(exc).__name__} (no message)"
 
 
 def main() -> int:
@@ -60,15 +136,20 @@ def main() -> int:
         statements = split_statements(Path(path).read_text())
         print(f"\n{path}: {len(statements)} statement(s)")
         for stmt in statements:
-            label = " ".join(stmt.split())[:70]
+            label = " ".join(
+                ln for ln in stmt.splitlines() if not ln.strip().startswith("--")
+            )
+            label = " ".join(label.split())[:66]
             try:
                 conn.execute(stmt)
                 print(f"  ok    {label}")
             except Exception as exc:
                 failures += 1
                 print(f"  FAIL  {label}")
-                print(f"        {str(exc).splitlines()[0][:160]}")
+                print(f"        {_error_text(exc)}")
     conn.close()
+    if failures:
+        print(f"\n{failures} statement(s) failed")
     return 1 if failures else 0
 
 

@@ -20,22 +20,18 @@ Verify:
 exasol connect -c "SELECT COUNT(*) FROM TPCH.CUSTOMER"
 ```
 
-## 2. Python script language container
+## 2. No script language container needed
 
-UDFs do not work on a local deployment until a container is installed. This is
-the step most people miss — scripts fail with a missing-language error instead
-of something obvious.
+AIRLOCK's in-database logic is deliberately SQL and Lua only. Lua is compiled
+into Exasol, so nothing has to be downloaded and UDFs work on a bare local
+deployment.
 
-```bash
-exasol slc install python3 --auto-approve
-```
-
-The database restarts and pulls a multi-GB image inside its VM; the first run
-takes a while. Confirm with `exasol slc list` (`INSTALLED` should read `yes`).
-
-> Run this in a terminal that stays open. If the launcher is killed mid-start
-> the deployment is left in state `interrupted`; recover with
-> `exasol stop && exasol start`.
+> Installing the Python SLC (`exasol slc install python3`) pulls a multi-GB
+> image inside the VM. The launcher only allows VM init 4 minutes, so on a slow
+> connection it times out, kills the VM mid-write, and corrupts the ext4
+> filesystem — after which the database will not start. If you hit that:
+> `e2fsck -f -y <deployment>/local/runtime/vm/data.img`, then
+> `exasol slc remove python3 --no-restart`, then `exasol start`.
 
 ## 3. AIRLOCK
 
@@ -43,7 +39,7 @@ takes a while. Confirm with `exasol slc list` (`INSTALLED` should read `yes`).
 ./scripts/bootstrap.sh
 ```
 
-Creates the `AIRLOCK` schema, installs the UDFs, seeds the policy set, and syncs
+Creates the `AIRLOCK` schema, installs the views and Lua scripts, seeds the policy set, and syncs
 the Python environment.
 
 ## 4. Run it

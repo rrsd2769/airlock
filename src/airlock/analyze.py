@@ -83,13 +83,26 @@ def analyze(sql: str, default_schema: str | None = None) -> Features:
     f.group_by = [_norm(g.name) for g in tree.find_all(exp.Group) for g in g.expressions] \
         if tree.find(exp.Group) else []
     f.has_where = tree.find(exp.Where) is not None
-    f.select_star = any(isinstance(s, exp.Star) for s in tree.find_all(exp.Star))
+    # Only a bare '*' in the projection counts. COUNT(*) also contains a Star
+    # node, and treating that as SELECT * blocks every aggregate query.
+    f.select_star = any(
+        _is_star_projection(projection)
+        for select in tree.find_all(exp.Select)
+        for projection in select.expressions
+    )
     f.join_count = len(list(tree.find_all(exp.Join)))
 
     if f.kind in WRITE_KINDS:
         f.target_table = _write_target(tree, default_schema)
 
     return f
+
+
+def _is_star_projection(node: exp.Expression) -> bool:
+    """Bare `*` or a qualified `t.*`, but not the Star inside COUNT(*)."""
+    if isinstance(node, exp.Star):
+        return True
+    return isinstance(node, exp.Column) and isinstance(node.this, exp.Star)
 
 
 def _statement_kind(tree: exp.Expression) -> str:
