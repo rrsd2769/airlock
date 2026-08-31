@@ -8,28 +8,42 @@ cd "$ROOT"
 
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 
-step "Checking Exasol Personal is running"
-exasol connect -c "SELECT 1" >/dev/null
-echo "    database reachable"
+step "Syncing the Python environment"
+uv sync --python 3.12
 
-step "Checking the Python script language container is installed"
-if ! exasol slc list | grep -qE 'python-3.*yes'; then
-    echo "    installing PYTHON3 SLC (restarts the database)"
-    exasol slc install python3 --auto-approve
+step "Checking the database is reachable"
+uv run python - <<'PY'
+import ssl, sys
+from pathlib import Path
+import pyexasol
+pw = Path.home() / ".exasol-starter-kit/credentials/personal_sys_password"
+try:
+    c = pyexasol.connect(dsn="127.0.0.1:8563", user="sys",
+                         password=pw.read_text().strip() if pw.is_file() else "exasol",
+                         websocket_sslopt={"cert_reqs": ssl.CERT_NONE})
+    print("    reachable:", c.execute("SELECT COUNT(*) FROM TPCH.CUSTOMER").fetchone()[0],
+          "rows in TPCH.CUSTOMER")
+except Exception as exc:
+    sys.exit(f"    database not reachable: {exc}\n"
+             "    Start it with: exasol start")
+PY
+
+step "Checking the PYTHON3 script language container"
+if ! exasol slc list 2>/dev/null | grep -qE 'python-3.*yes'; then
+    echo "    PYTHON3 SLC is not installed. UDFs will fail without it."
+    echo "    Install it with: exasol slc install python3 --auto-approve"
+    echo "    (run that in a terminal you leave open; killing it mid-start"
+    echo "     corrupts the VM filesystem)"
+    exit 1
 fi
+echo "    installed"
 
-step "Creating the AIRLOCK schema"
-exasol connect -f sql/00_schema.sql
+step "Creating schema, UDFs, and policies"
+uv run python scripts/apply_sql.py sql/00_schema.sql sql/20_udfs.sql sql/10_policies.sql
 
-step "Installing in-database UDFs"
-exasol connect -f sql/20_udfs.sql
-
-step "Seeding policies"
-exasol connect -f sql/10_policies.sql
-
-step "Installing the Python package"
-uv sync
+step "Running the tests"
+uv run pytest -q
 
 step "Done"
-echo "    Run the demo:      uv run python -m airlock.demo"
-echo "    Start the MCP srv: uv run airlock-mcp"
+echo "    Demo:    uv run python -m airlock.demo"
+echo "    MCP:     uv run airlock-mcp"
