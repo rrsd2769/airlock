@@ -1,0 +1,69 @@
+"""Scripted walk-through of what the airlock actually stops.
+
+    uv run python -m airlock.demo
+"""
+from __future__ import annotations
+
+import textwrap
+
+from .db import connect
+from .gateway import Airlock
+from . import ledger
+
+SCENARIOS: list[tuple[str, str]] = [
+    ("A reasonable question the agent should be allowed to ask",
+     "SELECT N_NAME, COUNT(*) AS CUSTOMERS FROM TPCH.CUSTOMER c "
+     "JOIN TPCH.NATION n ON c.C_NATIONKEY = n.N_NATIONKEY GROUP BY N_NAME"),
+
+    ("Agent reaches for raw contact details",
+     "SELECT C_NAME, C_PHONE, C_ADDRESS FROM TPCH.CUSTOMER LIMIT 50"),
+
+    ("SELECT * pulls the protected columns implicitly",
+     "SELECT * FROM TPCH.CUSTOMER LIMIT 10"),
+
+    ("Balance requested raw, not aggregated (k-anonymity)",
+     "SELECT C_CUSTKEY, C_ACCTBAL FROM TPCH.CUSTOMER ORDER BY C_ACCTBAL DESC LIMIT 5"),
+
+    ("Same column, but properly aggregated",
+     "SELECT C_NATIONKEY, AVG(C_ACCTBAL) AS AVG_BAL, COUNT(*) AS N "
+     "FROM TPCH.CUSTOMER GROUP BY C_NATIONKEY"),
+
+    ("A write whose blast radius is small",
+     "UPDATE TPCH.CUSTOMER SET C_COMMENT = 'reviewed' WHERE C_CUSTKEY = 1"),
+
+    ("A write that would rewrite most of the table",
+     "UPDATE TPCH.CUSTOMER SET C_COMMENT = 'reviewed' WHERE C_ACCTBAL > 0"),
+
+    ("Agent tries to cover its tracks",
+     "DELETE FROM AIRLOCK.LEDGER"),
+]
+
+
+def main() -> None:
+    conn = connect()
+    gate = Airlock(conn, principal="demo-agent")
+
+    for title, sql in SCENARIOS:
+        print("\n" + "=" * 78)
+        print(title)
+        print("-" * 78)
+        print(textwrap.fill(sql, 76, subsequent_indent="  "))
+        result = gate.submit(sql)
+        marker = {"ALLOW": "ALLOWED", "DENY": "BLOCKED",
+                  "REQUIRE_APPROVAL": "HELD FOR APPROVAL"}[result.decision]
+        print(f"\n  -> {marker}   (ledger #{result.seq})")
+        print(f"     {result.reason}")
+        if result.affected_rows is not None:
+            print(f"     measured blast radius: {result.affected_rows} rows")
+        if result.rows:
+            print(f"     returned {len(result.rows)} rows")
+
+    print("\n" + "=" * 78)
+    print("Ledger integrity")
+    print("-" * 78)
+    findings = ledger.verify(conn)
+    print("  chain intact" if not findings else f"  TAMPERING DETECTED: {findings}")
+
+
+if __name__ == "__main__":
+    main()
