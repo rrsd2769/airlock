@@ -46,3 +46,4 @@ uv run pytest -q
 step "Done"
 echo "    Demo:    uv run python -m airlock.demo"
 echo "    MCP:     uv run airlock-mcp"
+echo "    Console: uv run airlock-api      (http://127.0.0.1:8000)"
