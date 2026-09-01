@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyexasol
+import sqlglot
+from sqlglot import exp
 
 from . import ledger, policy, preflight, taint
 from .analyze import analyze
@@ -24,6 +26,28 @@ def _needs_group_measurement(features, policies: list[dict]) -> bool:
         return False
     return any(p["RULE_KIND"] == "MIN_AGGREGATION" and policy._touches_column(features, p)
                for p in policies)
+
+
+# The catalog is not where injections live. An agent browsing SYS to find out
+# what tables exist is not carrying a payload out of a customer's free text, and
+# SCAN_TAINT cannot read a system view anyway -- so a scan is not applicable
+# there rather than failed, and must not hold the statement.
+SYSTEM_SCHEMAS = ("SYS", "EXA_STATISTICS")
+
+
+def _reads_derived_source(tree: exp.Expression) -> bool:
+    """True when the query selects from a CTE or a subquery rather than a table.
+
+    It matters for `SELECT *`: the catalog can list a base table's text columns,
+    but not which of them a derived source passes through, and scanning one it
+    does not expose makes the probe fail.
+    """
+    if tree.find(exp.With) is not None:
+        return True
+    for node in list(tree.find_all(exp.From)) + list(tree.find_all(exp.Join)):
+        if isinstance(node.this, exp.Subquery):
+            return True
+    return False
 
 
 def _wants_taint_scan(features, policies: list[dict]) -> bool:
@@ -144,8 +168,13 @@ class Airlock:
                              affected_rows=affected, min_group=min_group,
                              taint_max=taint_max, rollback_sql=rollback)
 
-    def _text_columns(self, features) -> list[str]:
-        """The free-text columns this query would actually return.
+    def _text_columns(self, features, sql: str) -> tuple[list[str], bool]:
+        """The free-text columns this query would return, and whether we know.
+
+        The second element is False when the query's shape means we cannot tell
+        what text it returns. An empty list with False is "could not be
+        determined", which holds the statement; an empty list with True is
+        "nothing text-bearing comes back", which does not.
 
         Resolved from the catalog rather than a hardcoded list, so a new table
         needs no change here. A `SELECT *` returns all of them; anything else
@@ -157,9 +186,14 @@ class Airlock:
         the MCP surface's identifier guard, because a legitimately quoted table
         name still gets scanned instead of being refused.
         """
-        pairs = [tuple(t.split(".", 1)) for t in features.tables if "." in t]
+        pairs = [tuple(t.split(".", 1)) for t in features.tables
+                 if "." in t and t.split(".", 1)[0] not in SYSTEM_SCHEMAS]
         if not pairs:
-            return []
+            return [], True
+        try:
+            derived = _reads_derived_source(sqlglot.parse_one(sql, read="postgres"))
+        except Exception:  # noqa: BLE001 - if we cannot parse it, we cannot tell
+            derived = True
         predicate = " OR ".join(
             f"(COLUMN_SCHEMA = {{s{i}}} AND COLUMN_TABLE = {{t{i}}})"
             for i in range(len(pairs)))
@@ -173,22 +207,47 @@ class Airlock:
             params,
         ).fetchall()
         available = [r["C"] for r in rows]
-        if features.select_star:
-            return available
-        return [c for c in available if c in features.columns]
+        named = [c for c in available if c in features.columns]
+        if not features.select_star:
+            return named, True
+        if not derived:
+            return available, True
+        # A `*` over a CTE or subquery: the catalog knows the base table's text
+        # columns, not which the derived source passes through. Fall back to the
+        # ones the statement names -- and if it names none, say so rather than
+        # scan nothing and call the result clean.
+        return named, bool(named)
 
     def _measure_taint(self, sql: str, features) -> float | None:
-        probe = preflight.build_taint_probe(sql, self._text_columns(features))
+        """The worst taint score in what this query would return.
+
+        Three outcomes, and the difference between the last two is the whole
+        point: None means no scan applied -- nothing text-bearing comes back.
+        policy.TAINT_UNMEASURED means a scan applied and could not be taken,
+        which holds the statement rather than letting it through. Anything else
+        is a real score.
+
+        The sentinel travels in the ledger's TAINT_MAX alongside real scores, so
+        replay re-decides an unmeasurable statement exactly the way the gateway
+        did rather than having to guess at a state the ledger never stored.
+        """
+        columns, resolvable = self._text_columns(features, sql)
+        if not columns:
+            return None if resolvable else policy.TAINT_UNMEASURED
+
+        probe = preflight.build_taint_probe(sql, columns)
         if probe is None:
-            return None
+            return policy.TAINT_UNMEASURED
         try:
             row = self.conn.execute(probe).fetchone()
-        except Exception:
-            return None
+        except Exception:  # noqa: BLE001 - a scan we could not take is not a pass
+            return policy.TAINT_UNMEASURED
         if not row:
-            return None
+            return policy.TAINT_UNMEASURED
         value = next(iter(row.values()))
-        return float(value) if value is not None else None
+        # MAX over an empty result set is NULL: the query returns no rows, so
+        # there is no text in it to be tainted.
+        return float(value) if value is not None else 0.0
 
     def _measure_min_group(self, sql: str) -> int | None:
         probe = preflight.build_group_probe(sql)

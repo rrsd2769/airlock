@@ -4,6 +4,7 @@ Exasol hands scaled DECIMALs back as strings and scale-0 DECIMALs as ints, so
 what reaches the browser has to be normalised on the way out. The trap worth a
 test: TAINT.ROW_KEY is a numeric-*looking* string that must survive as a string.
 """
+import inspect
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -40,3 +41,14 @@ def test_nested_rows_are_cleaned_throughout():
 
 def test_none_survives():
     assert _clean({"TAINT_MAX": None}) == {"TAINT_MAX": None}
+
+
+def test_the_unmeasured_sentinel_is_not_counted_as_a_scanned_result_set():
+    """A negative TAINT_MAX means the scan could not be taken. Counting it as a
+    scan would inflate the one number that claims coverage."""
+    from airlock.api import app
+    routes = [r for r in app.routes if getattr(r, "path", "") == "/api/overview"]
+    assert routes, "overview route missing"
+    source = inspect.getsource(routes[0].endpoint)
+    assert "TAINT_MAX >= 0" in source
+    assert "COUNT(TAINT_MAX)" not in source

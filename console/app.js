@@ -14,6 +14,13 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g,
 
 const fmt = (n) => (n === null || n === undefined) ? '&mdash;' : Number(n).toLocaleString();
 const num = (n, d = 2) => (n === null || n === undefined) ? '&mdash;' : Number(n).toFixed(d);
+
+// A negative TAINT_MAX is the gateway's sentinel for a scan that applied but
+// could not be taken. Showing it as -1.00 would read as a very clean result
+// set, which is the opposite of what it means.
+const taint = (n) => (n === null || n === undefined) ? '&mdash;'
+  : (Number(n) < 0 ? '<span title="the result set could not be scanned">not scanned</span>'
+                   : num(n));
 const $ = (s) => document.querySelector(s);
 
 async function api(path, opts) {
@@ -99,7 +106,7 @@ async function loadLedger() {
         <td><span class="tag ${esc(r.DECISION)}">${esc(r.DECISION)}</span></td>
         <td class="num">${fmt(r.EST_ROWS)}</td>
         <td class="num">${fmt(r.MIN_GROUP)}</td>
-        <td class="num">${r.TAINT_MAX === null ? '&mdash;' : num(r.TAINT_MAX)}</td>
+        <td class="num">${taint(r.TAINT_MAX)}</td>
         <td class="num">${num(r.LATENCY_MS, 1)}</td>
       </tr>`).join('');
     body.querySelectorAll('tr').forEach((tr) =>
@@ -122,7 +129,7 @@ async function openEntry(seq) {
     const measured = [
       ['rows affected', fmt(e.EST_ROWS)],
       ['smallest group', fmt(e.MIN_GROUP)],
-      ['worst taint', e.TAINT_MAX === null ? '&mdash;' : num(e.TAINT_MAX)],
+      ['worst taint', taint(e.TAINT_MAX)],
       ['decided in', num(e.LATENCY_MS, 1) + ' ms'],
     ];
     let features = e.FEATURES;

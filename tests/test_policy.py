@@ -4,7 +4,8 @@ That purity is what makes replay possible: the same function decides live
 traffic and historical traffic.
 """
 from airlock.analyze import analyze
-from airlock.policy import ALLOW, DENY, REQUIRE_APPROVAL, evaluate
+from airlock.policy import (ALLOW, DENY, REQUIRE_APPROVAL, TAINT_UNMEASURED,
+                            evaluate)
 
 
 def policy(**kw):
@@ -133,3 +134,30 @@ def test_moving_the_taint_threshold_changes_the_verdict():
                     taint_max=0.45).effect == ALLOW
     assert evaluate(q, [policy(RULE_KIND="TAINT_BLOCK", THRESHOLD=0.4)],
                     taint_max=0.45).effect == DENY
+
+
+def _taint_rule(threshold=0.7):
+    return [policy(POLICY_ID=6, NAME="block-tainted-rows", RULE_KIND="TAINT_BLOCK",
+                   EFFECT=DENY, THRESHOLD=threshold)]
+
+
+def test_a_result_set_that_could_not_be_scanned_is_held_not_allowed():
+    """The other two measured rules already fail to REQUIRE_APPROVAL. This one
+    used to be the way out: wrap a refused query in a UNION, lose the probe,
+    and the rows came back."""
+    d = evaluate(analyze("SELECT S_COMMENT FROM TPCH.SUPPLIER"), _taint_rule(),
+                 taint_max=TAINT_UNMEASURED)
+    assert d.effect == REQUIRE_APPROVAL
+    assert "could not be scanned" in d.reason_text
+
+
+def test_a_clean_scan_still_passes_and_a_dirty_one_still_denies():
+    f = analyze("SELECT S_COMMENT FROM TPCH.SUPPLIER")
+    assert evaluate(f, _taint_rule(), taint_max=0.0).effect == ALLOW
+    assert evaluate(f, _taint_rule(), taint_max=0.9).effect == DENY
+
+
+def test_no_scan_applied_is_not_the_same_as_a_scan_that_failed():
+    """None means nothing text-bearing came back, which is not a refusal."""
+    f = analyze("SELECT S_SUPPKEY FROM TPCH.SUPPLIER")
+    assert evaluate(f, _taint_rule(), taint_max=None).effect == ALLOW

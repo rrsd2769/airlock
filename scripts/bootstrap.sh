@@ -31,7 +31,7 @@ PY
 step "Checking Lua scripting"
 echo "    Lua is compiled into Exasol; no script language container is needed."
 
-step "Creating schema, UDFs, and policies"
+step "Creating schema, UDFs, and policies (this resets the ledger)"
 uv run python scripts/apply_sql.py sql/00_schema.sql sql/20_udfs.sql sql/10_policies.sql
 
 step "Planting the demo's injected rows"
@@ -44,6 +44,8 @@ step "Running the tests"
 uv run pytest -q
 
 step "Done"
-echo "    Demo:    uv run python -m airlock.demo"
-echo "    MCP:     uv run airlock-mcp"
-echo "    Console: uv run airlock-api      (http://127.0.0.1:8000)"
+echo "    Demo:     uv run python -m airlock.demo"
+echo "    History:  uv run python -m airlock.traffic --count 400"
+echo "              (the ledger is empty until this runs, and so is the console)"
+echo "    MCP:      uv run airlock-mcp"
+echo "    Console:  uv run airlock-api      (http://127.0.0.1:8000)"
