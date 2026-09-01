@@ -262,6 +262,24 @@ tbody tr.sel { background: #12212a; }
 .tag.REQUIRE_APPROVAL { color: var(--hold); background: #241c0c; }
 .kind { color: var(--muted); font: 500 11.5px var(--mono); }
 
+/* The why column. Rule names, chipped so several read as several rather than
+   as one run-on string, and capped so a statement that tripped three rules
+   cannot push the measured columns off the edge. */
+.why { max-width: 320px; line-height: 1.9; }
+.why .rn {
+  display: inline-block; margin-right: 4px;
+  font: 500 11px var(--mono); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 5px; padding: 2px 7px; white-space: nowrap;
+}
+.why.none { color: var(--dim); font-size: 12px; font-style: italic; }
+/* Sequence numbers are three digits; without this the column takes an equal
+   share of the table and the row reads as a number adrift from its verdict.
+   Scoped to the two decision tables -- the taint inventory and the rule set
+   lead with a wide name column that must not be capped at 54px. */
+#tab-overview thead th:first-child, #tab-overview tbody .num:first-child,
+#tab-ledger thead th:first-child, #tab-ledger tbody .num:first-child { width: 54px; }
+
 /* ---------- detail drawer ---------- */
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 92vw);
@@ -271,16 +289,47 @@ tbody tr.sel { background: #12212a; }
   overflow-y: auto; z-index: 40; padding: 20px 24px 50px;
 }
 .drawer.on { transform: none; }
-.drawer h3 { margin: 0 0 3px; font: 600 15px var(--sans); }
+.drawer h3 { margin: 0 0 3px; font: 600 16px var(--sans); }
 .drawer .close { position: absolute; top: 15px; right: 18px; }
-.field { margin-top: 17px; }
-.field .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
+
+/* The verdict is the headline, so it is set beside the title at the size the
+   title is rather than trailing it as another inline chip. */
+.dhead { display: flex; align-items: flex-start; gap: 14px; padding-right: 92px; }
+.dhead > div:first-child { min-width: 0; flex: 1; }
+.tag.big { font-size: 12px; padding: 6px 11px; letter-spacing: .06em; flex: none; }
+
+.field { margin-top: 22px; }
+.field .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+
+/* ---------- why ---------- */
+/* One card per rule that objected. The stored REASON is a pipe-joined string
+   sealed inside the entry hash, so it is split and paired with the rule rows
+   at render time -- see reasonsFor() in app.js. This block replaced both the
+   old <pre> of that string and the separate dump of the rules it names. */
+.reasons { display: grid; gap: 9px; }
+.reason {
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-left: 3px solid var(--dim);
+  border-radius: var(--radius-sm); padding: 12px 14px;
+}
+.reason.DENY { border-left-color: var(--deny); }
+.reason.REQUIRE_APPROVAL { border-left-color: var(--hold); }
+.reason.ALLOW { border-left-color: var(--allow); }
+.rh { display: flex; align-items: center; gap: 10px; }
+.rn { font: 600 12.5px var(--mono); color: var(--fg); }
+.rh .tag { margin-left: auto; flex: none; }
+/* The sentence the policy wrote. Largest text in the drawer on purpose: it is
+   the answer, and everything around it is provenance for the answer. */
+.reason p { margin: 8px 0 0; font-size: 13.5px; line-height: 1.55; color: var(--fg); }
+.rm { margin-top: 9px; color: var(--dim); font: 11px var(--mono); }
+/* No rule behind it -- "no policy matched" and anything else the composer
+   emitted as prose. Stated, not dressed up as a finding. */
+.reason.quiet { border-left-color: var(--line); color: var(--muted); font-size: 13px; }
 pre {
   margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
   padding: 11px 13px; font: 12px/1.6 var(--mono); color: var(--fg);
   white-space: pre-wrap; word-break: break-word; overflow-x: auto;
 }
-pre.hash { color: var(--muted); font-size: 11px; }
 .mgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 1px; background: var(--line-soft); border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
 .mgrid > div { background: var(--panel-2); padding: 10px 12px; }
 .mgrid .n { font: 600 16px var(--mono); }
@@ -336,9 +385,9 @@ pre.hash { color: var(--muted); font-size: 11px; }
 /* The console is filmed beside an agent chat pane, so the width that matters
    most is half of 1920. Below that it degrades rather than breaking. */
 @media (max-width: 1200px) {
-  /* The measured columns -- smallest group, worst taint -- are the point of the
-     ledger, so give up statement text before pushing them off the edge. The
-     drawer has the statement in full either way. */
+  /* Caps the taint inventory's sample text, which is the only wide free-text
+     column left on the page -- the ledger gave up its statement column, and
+     the drawer has the statement in full. */
   .sql { max-width: 265px; }
   /* The badge is decoration and it is what makes a KPI label wrap to two lines
      once the rail has taken its width. Four numbers on one row matters more. */
