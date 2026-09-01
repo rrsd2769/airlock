@@ -56,6 +56,7 @@ class Airlock:
         self.conn = conn
         self.principal = principal or settings.principal
         self.session_id = session_id or uuid.uuid4().hex
+        self._key_cache: dict[str, list[str]] = {}
         self._register_session()
 
     def _register_session(self) -> None:
@@ -202,5 +203,33 @@ class Airlock:
         except Exception:
             return None, None
         snapshot = f"AIRLOCK.SNAP_{uuid.uuid4().hex[:12].upper()}"
-        rollback = preflight.build_rollback(sql, features, snapshot)
+        rollback = preflight.build_rollback(
+            sql, features, snapshot,
+            key_columns=self._key_columns(features.target_table))
         return affected, rollback
+
+    def _key_columns(self, table: str | None) -> list[str]:
+        """Primary key of a write's target, in key order, from the catalog.
+
+        The compensating statement has to match each snapshotted pre-image row
+        back to the row the write changed, and the key is what does that. Read
+        from the catalog rather than configured, so a new table needs no change
+        here; cached because a session tends to write to the same few tables.
+        """
+        if not table or "." not in table:
+            return []
+        if table in self._key_cache:
+            return self._key_cache[table]
+        schema, name = table.split(".", 1)
+        try:
+            rows = self.conn.execute(
+                "SELECT COLUMN_NAME AS C FROM SYS.EXA_ALL_CONSTRAINT_COLUMNS "
+                "WHERE CONSTRAINT_SCHEMA = {schema} AND CONSTRAINT_TABLE = {tbl} "
+                "AND CONSTRAINT_TYPE = 'PRIMARY KEY' ORDER BY ORDINAL_POSITION",
+                {"schema": schema, "tbl": name},
+            ).fetchall()
+        except Exception:  # noqa: BLE001 - no key found means a narrower rollback
+            return []
+        keys = [r["C"] for r in rows]
+        self._key_cache[table] = keys
+        return keys
