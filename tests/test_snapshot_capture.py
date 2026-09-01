@@ -16,7 +16,8 @@ statements the gateway issues and in what order, not what Exasol replies.
 import pytest
 
 from airlock import policy
-from airlock.gateway import Airlock
+from airlock.gateway import Airlock, Measurements
+from airlock.policy import Decision
 from airlock.statement import Statement
 from tests.fakes import FakeCatalog
 
@@ -253,3 +254,39 @@ def test_statements_with_no_pre_image_never_reach_the_capture(sql):
     _submit(conn, sql)
     assert conn.issued("CREATE TABLE AIRLOCK.SNAP_") == []
 
+
+
+# --------------------------------------------------------------------------
+# every exit reports every measurement
+# --------------------------------------------------------------------------
+
+MEASURED = Measurements(affected_rows=2729, rollback_sql="MERGE INTO TPCH.CUSTOMER t",
+                        snapshot_table="AIRLOCK.SNAP_X", min_group=94, taint_max=0.42)
+
+
+@pytest.mark.parametrize("exit_", [
+    lambda m, d: m.refused(d, 7),
+    lambda m, d: m.wrote(d, 7, 2729),
+    lambda m, d: m.returned(d, 7, [], False),
+], ids=["refused", "wrote", "returned"])
+def test_every_exit_from_submit_reports_every_measurement(exit_):
+    """These were three `GatewayResult(...)` calls with eight overlapping
+    keyword arguments each, and nothing checked that they agreed. A measurement
+    left off one of them returned None to the console and the MCP surface with
+    no error anywhere."""
+    result = exit_(MEASURED, Decision(effect=policy.ALLOW, reasons=["ok"]))
+    assert result.affected_rows == 2729
+    assert result.min_group == 94
+    assert result.taint_max == 0.42
+    assert result.rollback_sql == "MERGE INTO TPCH.CUSTOMER t"
+    assert result.snapshot_table == "AIRLOCK.SNAP_X"
+    assert result.seq == 7
+    assert result.decision == policy.ALLOW
+
+
+def test_a_write_reports_the_rows_it_actually_touched_not_the_estimate():
+    """The measured radius is what policy decided on; the row count is what the
+    write did. Reporting the estimate after execution would hide a difference
+    between them that is worth seeing."""
+    result = MEASURED.wrote(Decision(effect=policy.ALLOW), 7, 2731)
+    assert result.affected_rows == 2731

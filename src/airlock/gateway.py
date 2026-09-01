@@ -59,6 +59,50 @@ class GatewayResult:
     snapshot_table: str | None = None
 
 
+@dataclass
+class Measurements:
+    """What AIRLOCK measured about a statement before it decided.
+
+    One value rather than five locals threaded through `submit`, because every
+    exit from `submit` has to report all of them and nothing was checking that
+    they did. `snapshot_table` was added as the fifth measurement in the commit
+    that made rollbacks runnable, and had to be carried to three separate
+    `GatewayResult(...)` calls by hand -- one missed would have returned None
+    silently. There is one call now.
+    """
+
+    affected_rows: int | None = None
+    rollback_sql: str | None = None
+    snapshot_table: str | None = None
+    min_group: int | None = None
+    taint_max: float | None = None
+
+    def _result(self, decision, seq: int, *, affected_rows: int | None = None,
+                rows: list[dict[str, Any]] | None = None,
+                truncated: bool = False) -> GatewayResult:
+        return GatewayResult(
+            decision=decision.effect, reason=decision.reason_text, seq=seq,
+            affected_rows=self.affected_rows if affected_rows is None
+            else affected_rows,
+            min_group=self.min_group, taint_max=self.taint_max,
+            rollback_sql=self.rollback_sql, snapshot_table=self.snapshot_table,
+            rows=rows, truncated=truncated)
+
+    def refused(self, decision, seq: int) -> GatewayResult:
+        """Policy did not allow it. Nothing ran, and the radius stays the
+        measured one -- what the write *would* have touched is the reason."""
+        return self._result(decision, seq)
+
+    def wrote(self, decision, seq: int, affected_rows: int | None) -> GatewayResult:
+        """A write that ran. Its real row count replaces the measured one."""
+        return self._result(decision, seq, affected_rows=affected_rows)
+
+    def returned(self, decision, seq: int, rows: list[dict[str, Any]],
+                 truncated: bool) -> GatewayResult:
+        """A query that ran and produced a result set."""
+        return self._result(decision, seq, rows=rows, truncated=truncated)
+
+
 class Airlock:
     def __init__(self, conn: pyexasol.ExaConnection, principal: str | None = None,
                  session_id: str | None = None,
@@ -93,30 +137,29 @@ class Airlock:
         # First pass: everything decidable from the statement alone.
         decision = policy.evaluate(features, policies)
 
-        affected = None
-        rollback = None
-        snapshot = None
-        min_group = None
-        taint_max = None
+        measured_facts = Measurements()
         if decision.effect != policy.DENY and features.kind in {"UPDATE", "DELETE",
                                                                 "INSERT", "MERGE"}:
-            affected, rollback, snapshot = self._measure_blast_radius(stmt)
+            (measured_facts.affected_rows, measured_facts.rollback_sql,
+             measured_facts.snapshot_table) = self._measure_blast_radius(stmt)
             # Second pass, now that the radius is a measured fact.
-            decision = policy.evaluate(features, policies, affected_rows=affected)
+            decision = policy.evaluate(features, policies,
+                                       affected_rows=measured_facts.affected_rows)
         elif decision.effect != policy.DENY and features.kind == "SELECT":
             measured = False
             # k-anonymity is a claim about group sizes, so measure them rather
             # than trusting that an aggregate is automatically anonymous.
             if _needs_group_measurement(features, policies):
-                min_group = self._measure_min_group(stmt)
+                measured_facts.min_group = self._measure_min_group(stmt)
                 measured = True
             # Scan the rows on their way out, not the prompt on the way in.
             if _wants_taint_scan(features, policies):
-                taint_max = self._measure_taint(stmt)
-                measured = taint_max is not None or measured
+                measured_facts.taint_max = self._measure_taint(stmt)
+                measured = measured_facts.taint_max is not None or measured
             if measured:
-                decision = policy.evaluate(features, policies, min_group=min_group,
-                                           taint_max=taint_max)
+                decision = policy.evaluate(features, policies,
+                                           min_group=measured_facts.min_group,
+                                           taint_max=measured_facts.taint_max)
 
         # The compensating statement reads from a pre-image, so take it before the
         # write runs -- and only once the verdict is ALLOW, or every refused write
@@ -124,10 +167,10 @@ class Airlock:
         # write is refused rather than executed without an undo, and the refusal
         # goes in the ledger, because an entry that says ALLOW for a statement we
         # then declined to run would be the same lie in a different place.
-        if decision.effect == policy.ALLOW and snapshot is not None:
-            failure = self._capture_pre_image(stmt, snapshot)
+        if decision.effect == policy.ALLOW and measured_facts.snapshot_table:
+            failure = self._capture_pre_image(stmt, measured_facts.snapshot_table)
             if failure is not None:
-                snapshot = None
+                measured_facts.snapshot_table = None
                 decision.effect = policy.DENY
                 decision.reasons.append(failure)
 
@@ -142,35 +185,25 @@ class Airlock:
             decision=decision.effect,
             matched_policies=decision.matched_csv,
             reason=decision.reason_text,
-            est_rows=affected,
-            min_group=min_group,
-            rollback_sql=rollback,
-            taint_max=taint_max,
+            est_rows=measured_facts.affected_rows,
+            min_group=measured_facts.min_group,
+            rollback_sql=measured_facts.rollback_sql,
+            taint_max=measured_facts.taint_max,
             latency_ms=elapsed,
         )
 
         if decision.effect != policy.ALLOW:
-            return GatewayResult(decision=decision.effect, reason=decision.reason_text,
-                                 seq=entry.seq, affected_rows=affected,
-                                 min_group=min_group, taint_max=taint_max,
-                                 rollback_sql=rollback, snapshot_table=snapshot)
+            return measured_facts.refused(decision, entry.seq)
 
         cursor = self.conn.execute(sql)
 
         # Only queries produce a result set; a write reports its row count.
         if features.kind != "SELECT":
-            return GatewayResult(decision=policy.ALLOW, reason=decision.reason_text,
-                                 seq=entry.seq, affected_rows=cursor.rowcount(),
-                                 min_group=min_group, taint_max=taint_max,
-                                 rollback_sql=rollback, snapshot_table=snapshot)
+            return measured_facts.wrote(decision, entry.seq, cursor.rowcount())
 
         rows = cursor.fetchmany(max_rows + 1)
         truncated = len(rows) > max_rows
-        return GatewayResult(decision=policy.ALLOW, reason=decision.reason_text,
-                             seq=entry.seq, rows=rows[:max_rows], truncated=truncated,
-                             affected_rows=affected, min_group=min_group,
-                             taint_max=taint_max, rollback_sql=rollback,
-                             snapshot_table=snapshot)
+        return measured_facts.returned(decision, entry.seq, rows[:max_rows], truncated)
 
     def _text_columns(self, stmt: Statement) -> tuple[list[str], bool]:
         """The free-text columns this query would return, and whether we know.
