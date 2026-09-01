@@ -16,6 +16,12 @@ ALLOW = "ALLOW"
 DENY = "DENY"
 REQUIRE_APPROVAL = "REQUIRE_APPROVAL"
 
+# Recorded in the ledger's TAINT_MAX when a scan applied but could not be taken.
+# Real scores are 0..1, so a negative is unambiguous, and it travels with the
+# entry -- which is what lets replay re-decide the statement exactly rather than
+# meeting a NULL it cannot tell apart from "no scan applied".
+TAINT_UNMEASURED = -1.0
+
 # Most restrictive wins.
 _RANK = {ALLOW: 0, REQUIRE_APPROVAL: 1, DENY: 2}
 
@@ -131,7 +137,17 @@ def evaluate(features: Features, policies: list[dict], *,
                             p["POLICY_ID"])
 
         elif kind == "TAINT_BLOCK":
-            if taint_max is not None and taint_max >= float(p["THRESHOLD"]):
+            if taint_max is None:
+                pass  # No scan applied: nothing text-bearing comes back.
+            elif taint_max < 0:
+                # A result set we could not scan is not evidence that it is
+                # clean. Same posture as an unmeasured write or group size --
+                # this rule used to be the one that let it through.
+                d.apply(REQUIRE_APPROVAL,
+                        f"{p['NAME']}: result set could not be scanned for "
+                        f"injected instructions",
+                        p["POLICY_ID"])
+            elif taint_max >= float(p["THRESHOLD"]):
                 d.apply(p["EFFECT"],
                         f"{p['NAME']}: result set contains injected instructions "
                         f"(taint {taint_max:.2f})",

@@ -102,7 +102,9 @@ def overview() -> dict:
                CAST(AVG(LATENCY_MS) AS DOUBLE) AS AVG_LATENCY,
                MAX(TS) AS LAST_SEEN,
                COUNT(MIN_GROUP) AS GROUPS_MEASURED,
-               COUNT(TAINT_MAX) AS TAINT_SCANNED
+               -- A negative TAINT_MAX is the sentinel for a scan that applied
+               -- but could not be taken. It is not a scanned result set.
+               COUNT(CASE WHEN TAINT_MAX >= 0 THEN 1 END) AS TAINT_SCANNED
         FROM AIRLOCK.LEDGER
         """
     ) or {}
@@ -118,7 +120,7 @@ def overview() -> dict:
     taint_rows = _clean(taint_rows) or {}
 
     withheld = _one("SELECT COUNT(*) AS N FROM AIRLOCK.LEDGER "
-                    "WHERE TAINT_MAX IS NOT NULL AND DECISION <> 'ALLOW'") or {}
+                    "WHERE TAINT_MAX >= 0 AND DECISION <> 'ALLOW'") or {}
 
     return {
         "total": stats.get("TOTAL", 0),

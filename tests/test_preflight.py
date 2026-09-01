@@ -166,3 +166,40 @@ def test_rollback_comments_hold_no_semicolons():
         comments = [ln for ln in rollback.splitlines() if ln.lstrip().startswith("--")]
         assert comments
         assert not any(";" in ln for ln in comments)
+
+
+def test_taint_probe_scans_both_branches_of_a_union():
+    """Wrapping a refused query in `UNION ALL SELECT ... WHERE 1=0` used to
+    produce no probe at all, and an unmeasured result set was allowed."""
+    probe = build_taint_probe(
+        "SELECT S_COMMENT FROM TPCH.SUPPLIER "
+        "UNION ALL SELECT S_COMMENT FROM TPCH.SUPPLIER WHERE 1 = 0",
+        ["S_COMMENT"])
+    assert probe is not None
+    assert probe.count("AIRLOCK.SCAN_TAINT(S_COMMENT)") == 2
+    assert "UNION ALL" in probe.upper()
+
+
+def test_taint_probe_scans_every_branch_of_a_chained_union():
+    probe = build_taint_probe(
+        "SELECT S_COMMENT FROM TPCH.SUPPLIER "
+        "UNION ALL SELECT S_COMMENT FROM TPCH.SUPPLIER WHERE 1 = 0 "
+        "UNION ALL SELECT S_COMMENT FROM TPCH.SUPPLIER WHERE 2 = 0",
+        ["S_COMMENT"])
+    assert probe.count("AIRLOCK.SCAN_TAINT(S_COMMENT)") == 3
+
+
+def test_taint_probe_keeps_a_cte_it_selects_through():
+    probe = build_taint_probe(
+        "WITH x AS (SELECT S_COMMENT FROM TPCH.SUPPLIER) SELECT S_COMMENT FROM x",
+        ["S_COMMENT"])
+    assert probe is not None
+    assert "WITH" in probe.upper()
+
+
+def test_taint_probe_drops_the_limit_on_every_branch_of_a_union():
+    probe = build_taint_probe(
+        "SELECT S_COMMENT FROM TPCH.SUPPLIER LIMIT 5 "
+        "UNION ALL SELECT S_COMMENT FROM TPCH.SUPPLIER LIMIT 5",
+        ["S_COMMENT"])
+    assert "LIMIT" not in probe.upper()

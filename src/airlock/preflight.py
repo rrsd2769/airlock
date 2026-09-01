@@ -78,6 +78,51 @@ def build_group_probe(sql: str) -> str | None:
     return f"SELECT MIN(GRP_N) AS MIN_GROUP FROM ({inner.sql(dialect='postgres')})"
 
 
+def _scan_projections(text_columns: list[str]) -> list[exp.Expression] | None:
+    """SCAN_TAINT(col) AS RAW_i, one per column we care about."""
+    projections = []
+    for i, column in enumerate(text_columns):
+        try:
+            call = sqlglot.parse_one(f"AIRLOCK.SCAN_TAINT({column})", read="postgres")
+        except Exception:  # noqa: BLE001 - an unscannable column means no probe
+            return None
+        projections.append(exp.alias_(call, f"RAW_{i}"))
+    return projections
+
+
+def _scan_rewrite(node: exp.Expression, text_columns: list[str]) -> exp.Expression | None:
+    """Replace a query's projections with taint scores, through set operations.
+
+    A UNION is rewritten branch by branch rather than skipped. That matters:
+    the projections are what the rewrite throws away, so a query the gateway
+    would otherwise refuse can be handed back unmeasured just by wrapping it in
+    `UNION ALL SELECT ... WHERE 1 = 0`.
+    """
+    if isinstance(node, exp.SetOperation):
+        rewritten = node.copy()
+        left = _scan_rewrite(node.this, text_columns)
+        right = _scan_rewrite(node.expression, text_columns)
+        if left is None or right is None:
+            return None
+        rewritten.set("this", left)
+        rewritten.set("expression", right)
+        for clause in ("order", "limit", "offset"):
+            rewritten.set(clause, None)
+        return rewritten
+
+    if not isinstance(node, exp.Select):
+        return None
+
+    projections = _scan_projections(text_columns)
+    if projections is None:
+        return None
+    rewritten = node.copy()
+    rewritten.set("expressions", projections)
+    for clause in ("order", "limit", "offset", "distinct"):
+        rewritten.set(clause, None)
+    return rewritten
+
+
 def build_taint_probe(sql: str, text_columns: list[str]) -> str | None:
     """Rewrite a query into the worst taint score among the rows it would return.
 
@@ -92,27 +137,20 @@ def build_taint_probe(sql: str, text_columns: list[str]) -> str | None:
 
     Aggregates are skipped by the caller: they return numbers, and an injection
     needs text to ride out on.
+
+    Returning None here no longer means "allow": the gateway treats a scan it
+    wanted but could not take as a reason to hold the statement.
     """
     if not text_columns:
         return None
     try:
         tree = sqlglot.parse_one(sql, read="postgres")
-    except Exception:
-        return None
-    if not isinstance(tree, exp.Select):
+    except Exception:  # noqa: BLE001 - unparseable is the caller's problem
         return None
 
-    inner = tree.copy()
-    projections = []
-    for i, column in enumerate(text_columns):
-        try:
-            call = sqlglot.parse_one(f"AIRLOCK.SCAN_TAINT({column})", read="postgres")
-        except Exception:
-            return None
-        projections.append(exp.alias_(call, f"RAW_{i}"))
-    inner.set("expressions", projections)
-    for clause in ("order", "limit", "offset", "distinct"):
-        inner.set(clause, None)
+    inner = _scan_rewrite(tree, text_columns)
+    if inner is None:
+        return None
 
     # SCAN_TAINT returns "score|patterns"; the score is everything before the bar.
     scores = [f"TO_NUMBER(SUBSTR(RAW_{i}, 1, INSTR(RAW_{i}, '|') - 1))"
