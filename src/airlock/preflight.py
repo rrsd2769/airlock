@@ -121,11 +121,30 @@ def build_taint_probe(sql: str, text_columns: list[str]) -> str | None:
     return f"SELECT MAX({worst}) AS TAINT_MAX FROM ({inner.sql(dialect='postgres')})"
 
 
-def build_rollback(sql: str, features: Features, snapshot_table: str) -> str | None:
+def _assigned_columns(tree: exp.Update) -> list[str]:
+    """The columns an UPDATE writes to, in the order it names them."""
+    columns = []
+    for assignment in tree.expressions:
+        if isinstance(assignment, exp.EQ) and isinstance(assignment.this, exp.Column):
+            name = assignment.this.name.upper()
+            if name not in columns:
+                columns.append(name)
+    return columns
+
+
+def build_rollback(sql: str, features: Features, snapshot_table: str,
+                   key_columns: list[str] | None = None) -> str | None:
     """Compensating statement that reverses the write.
 
     DELETE and UPDATE are reversed from a snapshot taken before execution;
-    INSERT is reversed by deleting what was inserted.
+    INSERT has no pre-image to reverse from.
+
+    `key_columns` is the target's primary key, read from the catalog by the
+    caller. An UPDATE's compensating statement has to match each pre-image row
+    back to the row the write changed, and the key is the only thing that does
+    that reliably -- so what we can generate depends on whether the table has
+    one. We would rather emit a narrower statement, or say plainly that we
+    cannot, than emit a plausible one that restores the wrong rows.
     """
     if features.target_table is None:
         return None
@@ -134,18 +153,62 @@ def build_rollback(sql: str, features: Features, snapshot_table: str) -> str | N
         return f"INSERT INTO {features.target_table} SELECT * FROM {snapshot_table}"
 
     if features.kind == "UPDATE":
-        # Restore the pre-image rows wholesale: delete the touched keys, reinsert.
-        return (
-            f"-- restore pre-image captured in {snapshot_table}\n"
-            f"MERGE INTO {features.target_table} t\n"
-            f"USING {snapshot_table} s ON (/* TODO: key columns */)\n"
-            f"WHEN MATCHED THEN UPDATE SET /* TODO: restore columns */"
-        )
+        return _update_rollback(sql, features, snapshot_table, key_columns)
 
     if features.kind == "INSERT":
-        return f"-- reverse insert: DELETE FROM {features.target_table} WHERE <inserted keys>"
+        # An insert has no pre-image: the rows did not exist to be snapshotted,
+        # and which ones are new is only known once the statement has run.
+        return (f"-- reverse insert: no pre-image exists. Reversing requires the keys\n"
+                f"-- of the rows {features.target_table} gains, which are only known\n"
+                f"-- after execution.")
 
     return None
+
+
+def _update_rollback(sql: str, features: Features, snapshot_table: str,
+                     key_columns: list[str] | None) -> str | None:
+    try:
+        tree = sqlglot.parse_one(sql, read="postgres")
+    except Exception:  # noqa: BLE001 - unparseable means no rollback, not a crash
+        return None
+    if not isinstance(tree, exp.Update):
+        return None
+
+    target = features.target_table
+    assigned = _assigned_columns(tree)
+    if not assigned:
+        return None
+
+    if key_columns:
+        # Restore only the columns the write touched. Everything else in the
+        # snapshot is already what it was.
+        on = " AND ".join(f"t.{k} = s.{k}" for k in key_columns)
+        restore = ", ".join(f"t.{c} = s.{c}" for c in assigned)
+        return (f"MERGE INTO {target} t\n"
+                f"USING {snapshot_table} s ON ({on})\n"
+                f"WHEN MATCHED THEN UPDATE SET {restore}")
+
+    # No key. The affected rows can still be replaced wholesale from the
+    # snapshot, but only if the write's own predicate still selects the same
+    # rows after it has run -- which it does exactly when the predicate reads
+    # no column the write changes.
+    where = tree.find(exp.Where)
+    predicate_columns = ({c.name.upper() for c in where.find_all(exp.Column)}
+                         if where else set())
+    if predicate_columns & set(assigned):
+        overlap = ", ".join(sorted(predicate_columns & set(assigned)))
+        # No semicolons in the comment text -- these strings are pasted into
+        # clients that split a script on them.
+        return (f"-- {target} has no primary key, and this write reads a column it\n"
+                f"-- also changes ({overlap}), so the rows it touched cannot be\n"
+                f"-- identified again once it has run. The pre-image is in\n"
+                f"-- {snapshot_table}, but reversing it needs a key.")
+
+    clause = f" {where.sql(dialect='postgres')}" if where else ""
+    return (f"-- {target} has no primary key. The predicate does not read what\n"
+            f"-- this write changes, so it still selects exactly the affected rows.\n"
+            f"DELETE FROM {target}{clause};\n"
+            f"INSERT INTO {target} SELECT * FROM {snapshot_table}")
 
 
 def snapshot_sql(features: Features, sql: str, snapshot_table: str) -> str | None:
