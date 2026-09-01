@@ -5,7 +5,7 @@ Both of these run against the connection directly rather than through
 pin. A fake connection stands in for the database: what matters is the query
 text and the parameters the gateway hands over, not what Exasol replies.
 """
-from airlock.analyze import analyze
+from airlock.statement import Statement
 from airlock.gateway import Airlock
 
 
@@ -35,7 +35,7 @@ def _gateway(conn):
 
 def _columns(gate, sql):
     """The gateway asks for the columns and whether it could tell."""
-    return gate._text_columns(analyze(sql), sql)
+    return gate._text_columns(Statement.parse(sql))
 
 
 def test_table_names_are_bound_not_pasted_into_the_catalog_query():

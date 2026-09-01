@@ -39,23 +39,47 @@ def _norm(name: str | None) -> str:
     return (name or "").upper()
 
 
+DIALECT = "postgres"
+
+
+def parse_sql(sql: str) -> tuple[exp.Expression | None, str | None]:
+    """Parse an agent's statement into a tree, or say why not.
+
+    The single call to sqlglot on an agent's SQL. Everything that needs the tree
+    -- the probes, the compensating statement, the pre-image capture -- takes it
+    from `statement.Statement` rather than parsing again, so that "what if it
+    will not parse" is answered once, here, and denied upstream by the policy
+    engine rather than re-decided per builder.
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read=DIALECT)
+    except Exception as exc:  # noqa: BLE001 - any parse failure is a deny
+        return None, str(exc)[:500]
+    if tree is None:
+        return None, "empty statement"
+    return tree, None
+
+
 def analyze(sql: str, default_schema: str | None = None) -> Features:
     """Parse a statement into policy-relevant features.
 
     A statement we cannot parse is not waved through -- it comes back as
     kind=OTHER with parse_error set, and the policy engine denies by default.
+
+    Callers on the gateway's hot path want `statement.Statement.parse` instead,
+    which keeps the tree as well. This stays for the callers that only ever
+    needed the features: `policy.evaluate` is a pure function of them.
     """
-    f = Features()
-    try:
-        tree = sqlglot.parse_one(sql, read="postgres")
-    except Exception as exc:  # noqa: BLE001 - any parse failure is a deny
-        f.parse_error = str(exc)[:500]
-        return f
-
+    tree, error = parse_sql(sql)
     if tree is None:
-        f.parse_error = "empty statement"
-        return f
+        return Features(parse_error=error)
+    return features_from_tree(tree, default_schema)
 
+
+def features_from_tree(tree: exp.Expression,
+                       default_schema: str | None = None) -> Features:
+    """Everything policy needs to know about a statement, from its tree."""
+    f = Features()
     f.kind = _statement_kind(tree)
 
     for tbl in tree.find_all(exp.Table):
