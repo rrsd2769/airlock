@@ -16,7 +16,7 @@ statements the gateway issues and in what order, not what Exasol replies.
 import pytest
 
 from airlock import policy
-from airlock.analyze import analyze
+from airlock.statement import Statement
 from airlock.gateway import Airlock
 
 CUSTOMER_UPDATE = "UPDATE TPCH.CUSTOMER SET C_COMMENT = 'x' WHERE C_ACCTBAL > 0"
@@ -93,7 +93,7 @@ def _gateway(conn):
 
 def _blast(conn, sql):
     gate = _gateway(conn)
-    return gate._measure_blast_radius(sql, analyze(sql))
+    return gate._measure_blast_radius(Statement.parse(sql))
 
 
 # --------------------------------------------------------------------------
@@ -140,7 +140,7 @@ def test_the_capture_carries_the_writes_own_predicate():
     conn = FakeConn()
     gate = _gateway(conn)
     assert gate._capture_pre_image(
-        CUSTOMER_UPDATE, analyze(CUSTOMER_UPDATE), "AIRLOCK.SNAP_TEST") is None
+        Statement.parse(CUSTOMER_UPDATE), "AIRLOCK.SNAP_TEST") is None
     ctas = conn.issued("CREATE TABLE AIRLOCK.SNAP_TEST")
     assert len(ctas) == 1
     assert "C_ACCTBAL > 0" in ctas[0]
@@ -151,7 +151,7 @@ def test_a_capture_that_fails_says_why_instead_of_raising():
     conn = FakeConn(fail_on="CREATE TABLE")
     gate = _gateway(conn)
     failure = gate._capture_pre_image(
-        CUSTOMER_UPDATE, analyze(CUSTOMER_UPDATE), "AIRLOCK.SNAP_TEST")
+        Statement.parse(CUSTOMER_UPDATE), "AIRLOCK.SNAP_TEST")
     assert failure is not None
     assert "AIRLOCK.SNAP_TEST" in failure
     assert "already exists" in failure
