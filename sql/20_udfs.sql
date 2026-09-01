@@ -22,12 +22,32 @@ SELECT
     NVL(LAG(ENTRY_HASH) OVER (ORDER BY SEQ),
         '0000000000000000000000000000000000000000000000000000000000000000'
     ) AS EXPECTED_PREV,
+    -- Everything the decision consists of, not just the verdict: who ran it,
+    -- which rules fired and why, and the measurements the verdict rested on.
+    -- airlock.replay re-decides from those measurements, so leaving them out
+    -- would let anyone with UPDATE on this table rewrite what a replay says.
+    --
+    -- LATENCY_MS is deliberately absent: no decision was taken on it, and it is
+    -- the one column that legitimately differs between two identical runs.
+    --
+    -- Exasol trims a scaled DECIMAL on the way to a string (0.8500 -> '0.85',
+    -- 0.0000 -> '0'), so TAINT_MAX is lifted onto an integer first and Python
+    -- does the same. NULL needs no NVL here -- Exasol's || drops a NULL operand,
+    -- and '' *is* NULL in Exasol, so NVL(x, '') would be a no-op regardless.
     LOWER(TO_CHAR(HASH_SHA256(
         SEQ
         || '|' || NVL(SESSION_ID, '')
         || '|' || TO_CHAR(TS, 'YYYY-MM-DD HH24:MI:SS.FF6')
+        || '|' || NVL(PRINCIPAL, '')
+        || '|' || NVL(STMT_KIND, '')
         || '|' || NVL(STMT_TEXT, '')
         || '|' || NVL(DECISION, '')
+        || '|' || NVL(MATCHED_POLICIES, '')
+        || '|' || NVL(REASON, '')
+        || '|' || CAST(EST_ROWS AS VARCHAR(40))
+        || '|' || CAST(MIN_GROUP AS VARCHAR(40))
+        || '|' || CAST(CAST(TAINT_MAX * 10000 AS DECIMAL(18,0)) AS VARCHAR(40))
+        || '|' || NVL(ROLLBACK_SQL, '')
         || '|' || NVL(PREV_HASH, '')
     ))) AS RECOMPUTED
 FROM LEDGER;
