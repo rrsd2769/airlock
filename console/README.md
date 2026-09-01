@@ -32,8 +32,22 @@ would be a fresh injection surface rather than a view of one.
 
 ## Layout
 
+Six destinations in a left rail -- Overview, Ledger, Taint inventory, Policy
+replay, Rule set, Sessions -- and a detail drawer that opens on any ledger row.
+Overview lands first: the four verdict counts, the split bar, the eight most
+recent decisions, and a fold holding the measurements behind those verdicts.
+
+Every page is a stack of cards. The rail collapses to icons below 1200px and
+goes off-canvas behind a toggle below 700px. 960px is the width that matters --
+the run sheet puts the console beside an agent chat pane -- so that is the width
+the layout is tuned for.
+
 | File | What's in it |
 |---|---|
-| `index.html` | Structure: vitals strip, five tabs, detail drawer |
+| `index.html` | Structure: icon sprite, rail, top bar, six panels, detail drawer |
 | `style.css` | The whole look, no framework |
 | `app.js` | Fetches `/api/*`, renders, polls every 5s |
+
+Icons are inline `<symbol>`s in `index.html`, not a font and not a package, for
+the same reason there is no build step: an icon set that can 404 on stage is a
+dependency the demo does not need.
