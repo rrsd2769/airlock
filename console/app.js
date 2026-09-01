@@ -183,13 +183,13 @@ async function loadPolicies() {
     $('#policy-body').innerHTML = policyCache.map((p) => `
       <tr>
         <td class="num">${p.POLICY_ID}</td>
-        <td><span class="kind">${esc(p.NAME)}</span></td>
+        <td class="ident"><span class="kind">${esc(p.NAME)}</span></td>
         <td class="kind">${esc(p.RULE_KIND)}</td>
         <td><span class="tag ${esc(p.EFFECT)}">${esc(p.EFFECT)}</span></td>
         <td class="sql">${esc([p.TARGET_SCHEMA, p.TARGET_TABLE, p.TARGET_COLUMN]
             .filter(Boolean).join('.')) || '<span style="color:var(--dim)">any</span>'}</td>
         <td class="num">${p.THRESHOLD === null ? '&mdash;' : p.THRESHOLD}</td>
-        <td style="color:var(--muted);max-width:380px">${esc(p.NOTE)}</td>
+        <td class="note">${esc(p.NOTE)}</td>
       </tr>`).join('');
     renderReplayRules();
   } catch (e) { fail($('#policy-body').parentElement.parentElement, e); }
