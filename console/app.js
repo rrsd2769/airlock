@@ -42,11 +42,16 @@ async function loadOverview() {
   $('#dsn').textContent = o.dsn;
   const total = Math.max(o.total, 1);
 
+  // One word. The pill sits in the header of every tab and is read at a glance
+  // on camera, so the sentence it used to spell out lives in the tooltip.
   const chain = $('#chain');
   chain.className = 'pill ' + (o.chain_intact ? 'ok' : 'bad');
+  chain.title = o.chain_intact
+    ? 'every ledger entry\u2019s hash matches the entry before it'
+    : 'the hash chain does not verify \u2014 an entry was altered or removed';
   chain.innerHTML = `<span class="dot live"></span> ${o.chain_intact
-    ? 'hash chain intact'
-    : `chain broken at #${esc(o.chain_breaks.map((b) => b.SEQ).join(', '))}`}`;
+    ? 'verified'
+    : `broken #${esc(o.chain_breaks.map((b) => b.SEQ).join(', '))}`}`;
 
   // The four verdict counts land on the page. The four measurements behind them
   // are still here, one click away, rather than competing with them on sight.
@@ -94,6 +99,23 @@ async function loadOverview() {
 
 let selectedSeq = null;
 
+// The rule names out of the stored REASON, without their explanations. Which
+// rules spoke is a glanceable fact and it is what the width freed by dropping
+// the time and statement columns is for; the explanations are sentences and
+// stay in the drawer, where reasonsFor() pairs them with the rules themselves.
+const firedRules = (reason) => String(reason || '').split(' | ').filter(Boolean)
+  .map((part) => { const at = part.indexOf(': '); return at === -1 ? '' : part.slice(0, at); })
+  .filter(Boolean);
+
+function whyCell(reason) {
+  const names = firedRules(reason);
+  if (!names.length) return '<td class="why none">no rule objected</td>';
+  // The full stored string on hover: the names alone say which rules matched,
+  // not what they saw, and one is a click away while the other is not.
+  return `<td class="why" title="${esc(reason)}">${
+    names.map((n) => `<span class="rn">${esc(n)}</span>`).join('')}</td>`;
+}
+
 // The Overview's short list. Same rows, same drawer, same escaping -- it is the
 // ledger's head, not a second rendering of it.
 async function loadRecent() {
@@ -103,10 +125,9 @@ async function loadRecent() {
     body.innerHTML = d.rows.map((r) => `
       <tr data-seq="${r.SEQ}">
         <td class="num">${r.SEQ}</td>
-        <td class="num">${esc((r.TS || '').slice(11, 23))}</td>
         <td><span class="kind">${esc(r.STMT_KIND)}</span></td>
-        <td class="sql">${esc(r.STMT_TEXT)}</td>
         <td><span class="tag ${esc(r.DECISION)}">${esc(r.DECISION)}</span></td>
+        ${whyCell(r.REASON)}
       </tr>`).join('');
     body.querySelectorAll('tr').forEach((tr) =>
       tr.onclick = () => openEntry(Number(tr.dataset.seq)));
@@ -127,16 +148,15 @@ async function loadLedger() {
     const d = await api('/api/ledger?' + p);
     $('#ledger-count').innerHTML = `${fmt(d.rows.length)} of ${fmt(d.total)} matching`;
     if (!d.rows.length) {
-      body.innerHTML = '<tr><td colspan="9"><div class="empty">nothing matches</div></td></tr>';
+      body.innerHTML = '<tr><td colspan="8"><div class="empty">nothing matches</div></td></tr>';
       return;
     }
     body.innerHTML = d.rows.map((r) => `
       <tr data-seq="${r.SEQ}" class="${r.SEQ === selectedSeq ? 'sel' : ''}">
         <td class="num">${r.SEQ}</td>
-        <td class="num">${esc((r.TS || '').slice(11, 23))}</td>
         <td><span class="kind">${esc(r.STMT_KIND)}</span></td>
-        <td class="sql">${esc(r.STMT_TEXT)}</td>
         <td><span class="tag ${esc(r.DECISION)}">${esc(r.DECISION)}</span></td>
+        ${whyCell(r.REASON)}
         <td class="num">${fmt(r.EST_ROWS)}</td>
         <td class="num">${fmt(r.MIN_GROUP)}</td>
         <td class="num">${taint(r.TAINT_MAX)}</td>
@@ -146,6 +166,36 @@ async function loadLedger() {
       tr.onclick = () => openEntry(Number(tr.dataset.seq)));
   } catch (e) { fail(body.parentElement.parentElement, e); }
 }
+
+// The stored REASON is inside the entry hash (ledger.entry_hash), so the 411
+// recorded strings are load-bearing and cannot be reformatted retroactively.
+// The improvement therefore belongs here, in the renderer: policy composes
+// reason_text by joining per-rule reasons with " | ", and each part reads
+// "rule-name: what it objected to". Splitting that back apart and pairing it
+// with the POLICIES rows collapses what used to be two blocks -- a pipe-joined
+// blob and a bracketed dump of the same rules -- into one answer to "why".
+function reasonsFor(reasonText, policies) {
+  const byName = new Map(policies.map((p) => [p.NAME, p]));
+  const out = String(reasonText || '').split(' | ').filter(Boolean).map((part) => {
+    const at = part.indexOf(': ');
+    const name = at === -1 ? null : part.slice(0, at);
+    const rule = name === null ? undefined : byName.get(name);
+    if (rule) byName.delete(name);
+    // No rule behind it means this is prose, not a finding -- "no policy
+    // matched" is the common case, and it is an answer worth showing plainly.
+    return rule ? { name, why: part.slice(at + 2), rule } : { name: null, why: part };
+  });
+  // A rule that fired but that the composer did not describe still belongs on
+  // the page; dropping it silently would understate why the verdict landed.
+  for (const [name, rule] of byName) out.push({ name, why: '', rule });
+  return out;
+}
+
+const ruleKind = (k) => String(k || '').toLowerCase().replace(/_/g, ' ');
+// Thresholds come back as floats. Number() drops the trailing zero, so a k of
+// 20.0 reads as 20 while a taint score of 0.7 keeps its digit.
+const threshold = (t) => (t === null || t === undefined) ? null
+  : `threshold ${Number(t)}`;
 
 async function openEntry(seq) {
   selectedSeq = seq;
@@ -159,32 +209,49 @@ async function openEntry(seq) {
 
   try {
     const e = await api('/api/ledger/' + seq);
+
+    // Why first, and largest. It is the one thing a viewer of this console is
+    // actually asking the ledger, and it used to sit fourth behind the SQL.
+    const why = reasonsFor(e.REASON, e.POLICIES).map((r) => {
+      if (!r.rule) return `<div class="reason quiet">${esc(r.why)}</div>`;
+      const meta = [ruleKind(r.rule.RULE_KIND), threshold(r.rule.THRESHOLD)]
+        .filter(Boolean).join(' &middot; ');
+      return `<div class="reason ${esc(r.rule.EFFECT)}">
+          <div class="rh">
+            <span class="rn">${esc(r.name)}</span>
+            <span class="tag ${esc(r.rule.EFFECT)}">${esc(r.rule.EFFECT)}</span>
+          </div>
+          ${r.why ? `<p>${esc(r.why)}</p>` : ''}
+          <div class="rm">${meta}</div>
+        </div>`;
+    }).join('');
+
     const measured = [
       ['rows affected', fmt(e.EST_ROWS)],
       ['smallest group', fmt(e.MIN_GROUP)],
       ['worst taint', taint(e.TAINT_MAX)],
       ['decided in', num(e.LATENCY_MS, 1) + ' ms'],
     ];
-    let features = e.FEATURES;
-    try { features = JSON.stringify(JSON.parse(e.FEATURES), null, 2); } catch { /* raw */ }
 
     out.innerHTML = `
-      <h3>Decision #${e.SEQ} &nbsp;<span class="tag ${esc(e.DECISION)}">${esc(e.DECISION)}</span></h3>
-      <div class="hint">${esc(e.TS)} &middot; ${esc(e.PRINCIPAL)} &middot; session ${esc(String(e.SESSION_ID).slice(0, 12))}</div>
+      <div class="dhead">
+        <div>
+          <h3>Decision #${e.SEQ}</h3>
+          <div class="hint">${esc(e.TS)} &middot; ${esc(e.PRINCIPAL)}</div>
+        </div>
+        <span class="tag big ${esc(e.DECISION)}">${esc(e.DECISION)}</span>
+      </div>
+
+      <div class="field"><div class="k">why</div>
+        <div class="reasons">${why}</div></div>
 
       <div class="field"><div class="k">statement</div><pre>${esc(e.STMT_TEXT)}</pre></div>
-      <div class="field"><div class="k">why</div><pre>${esc(e.REASON)}</pre></div>
+
       <div class="field"><div class="k">measured before deciding</div>
         <div class="mgrid">${measured.map(([k, v]) =>
           `<div><div class="n">${v}</div><div class="k">${k}</div></div>`).join('')}</div></div>
-      ${e.POLICIES.length ? `<div class="field"><div class="k">rules that fired</div><pre>${
-        e.POLICIES.map((p) => `#${p.POLICY_ID}  ${p.NAME}  [${p.RULE_KIND} -> ${p.EFFECT}${
-          p.THRESHOLD === null ? '' : ', threshold ' + p.THRESHOLD}]`).map(esc).join('\n')
-      }</pre></div>` : ''}
-      ${e.ROLLBACK_SQL ? `<div class="field"><div class="k">compensating statement</div><pre>${esc(e.ROLLBACK_SQL)}</pre></div>` : ''}
-      <div class="field"><div class="k">statement features</div><pre>${esc(features)}</pre></div>
-      <div class="field"><div class="k">chain</div>
-        <pre class="hash">prev  ${esc(e.PREV_HASH)}\nentry ${esc(e.ENTRY_HASH)}</pre></div>`;
+
+      ${e.ROLLBACK_SQL ? `<div class="field"><div class="k">compensating statement</div><pre>${esc(e.ROLLBACK_SQL)}</pre></div>` : ''}`;
   } catch (e) { fail(out, e); }
 }
 

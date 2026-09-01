@@ -92,7 +92,7 @@
   </button>
   <div class="crumb">Console <span class="sep">/</span> <b id="crumb">Overview</b></div>
   <div class="spacer"></div>
-  <span class="pill" id="chain"><span class="dot"></span> checking chain</span>
+  <span class="pill" id="chain"><span class="dot"></span> checking</span>
   <button class="ghost" id="refresh">Refresh</button>
 </div>
 
@@ -114,7 +114,7 @@
       <div class="scroll">
         <table>
           <thead><tr>
-            <th>#</th><th>time</th><th>kind</th><th>statement</th><th>verdict</th>
+            <th>#</th><th>kind</th><th>verdict</th><th>why</th>
           </tr></thead>
           <tbody id="recent-body"></tbody>
         </table>
@@ -159,8 +159,8 @@
     <div class="scroll">
       <table>
         <thead><tr>
-          <th>#</th><th>time</th><th>kind</th><th>statement</th>
-          <th>verdict</th><th class="num">rows</th><th class="num">min group</th>
+          <th>#</th><th>kind</th><th>verdict</th><th>why</th>
+          <th class="num">rows</th><th class="num">min group</th>
           <th class="num">taint</th><th class="num">ms</th>
         </tr></thead>
         <tbody id="ledger-body"></tbody>
