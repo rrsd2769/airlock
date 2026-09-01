@@ -9,14 +9,23 @@
 </head>
 <body>
 
-<header>
+<div class="app">
+
+<aside class="sidebar" id="sidebar">
   <div class="brand">AIR<span>LOCK</span></div>
   <div class="tagline">every statement an agent runs, decided and recorded</div>
+  <div class="side-foot">
+    <span class="pill" id="dsn">&mdash;</span>
+  </div>
+</aside>
+
+<div class="shell">
+
+<div class="topbar">
   <div class="spacer"></div>
-  <span class="pill" id="dsn">&mdash;</span>
   <span class="pill" id="chain"><span class="dot"></span> checking chain</span>
   <button class="ghost" id="refresh">Refresh</button>
-</header>
+</div>
 
 <div class="vitals" id="vitals"></div>
 
@@ -55,7 +64,7 @@
       </select>
       <span class="hint" id="ledger-count"></span>
     </div>
-    <div class="wrap">
+    <div class="scroll">
       <table>
         <thead><tr>
           <th>#</th><th>time</th><th>kind</th><th>statement</th>
@@ -81,7 +90,7 @@
         <tbody id="taint-cols"></tbody>
       </table>
     </div>
-    <div class="wrap">
+    <div class="scroll">
       <table>
         <thead><tr><th>score</th><th>location</th><th>matched patterns</th><th>payload</th></tr></thead>
         <tbody id="taint-body"></tbody>
@@ -113,7 +122,7 @@
   </section>
 
   <section class="panel" id="tab-policies">
-    <div class="wrap">
+    <div class="scroll">
       <table>
         <thead><tr>
           <th>#</th><th>name</th><th>kind</th><th>effect</th>
@@ -125,7 +134,7 @@
   </section>
 
   <section class="panel" id="tab-sessions">
-    <div class="wrap">
+    <div class="scroll">
       <table>
         <thead><tr>
           <th>session</th><th>principal</th><th>started</th>
@@ -136,6 +145,9 @@
     </div>
   </section>
 </main>
+
+</div><!-- .shell -->
+</div><!-- .app -->
 
 <aside class="drawer" id="drawer">
   <button class="ghost close" id="drawer-close">Close</button>
