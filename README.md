@@ -37,11 +37,19 @@ segment (569 per group) passes; the same average sliced by nation *and* segment
 **2. Blast-radius preflight.** Before any write executes, AIRLOCK rewrites it
 into the `SELECT COUNT(*)` that measures exactly how many rows it would touch,
 and runs it. Not an optimiser estimate — a real count, compared against a policy
-budget. It also captures a pre-image snapshot and synthesises the compensating
-statement — keyed on the target's primary key, read from the catalog — so an
-agent's UPDATE or DELETE has a real undo. Where the table has no key to match
-the pre-image back by, AIRLOCK narrows the statement or says plainly that it
-cannot generate one, rather than emitting SQL that would restore the wrong rows.
+budget. It also synthesises the compensating statement that reverses the write
+— keyed on the target's primary key, read from the catalog — and records it in
+the ledger beside the decision, so the undo for a write is written down at the
+moment the write is judged rather than reconstructed afterwards. Where the table
+has no key to match the pre-image back by, AIRLOCK narrows the statement or says
+plainly that it cannot generate one, rather than emitting SQL that would restore
+the wrong rows.
+
+The compensating statement reads from a pre-image snapshot, and taking that
+snapshot is the half that is not wired in: `preflight.snapshot_sql()` builds the
+CTAS and nothing calls it. The undo is generated and recorded, not yet runnable.
+Said plainly here because a rollback you cannot execute is worth less than one
+you can, and the gap belongs in the README rather than in a demo.
 
 *This is only affordable because the engine underneath is a columnar MPP
 analytics database.* On a row store, counting the blast radius of every write on
