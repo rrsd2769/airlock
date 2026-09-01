@@ -40,9 +40,16 @@ holds the statement: **2,729 rows, cap is 500**.
 > analytics engine — this is the one architecture where a real preflight is
 > cheap."
 
-Open that decision in the console's ledger. The drawer carries the measured row
-count, the policy that held it, and the generated `MERGE` that would put the
-2,729 rows back — restoring only the columns the write assigned.
+Open that decision in the console's ledger — it is **#10**, and the fastest way
+to it on camera is the ledger's own filters: statement kind `UPDATE`, verdict
+*held for approval*. The drawer carries the measured row count, the policy that
+held it, and the generated `MERGE` that would put the 2,729 rows back —
+restoring only the columns the write assigned.
+
+*If a judge asks whether you can run that `MERGE`:* it is generated and recorded
+at decision time, but the pre-image snapshot it reads from is not captured yet,
+so it is an undo that is written down rather than one you can execute. The
+README says the same thing. Do not claim more than that.
 
 ## 1:50 — Taint (25s)
 
@@ -63,7 +70,9 @@ inert. Then ask the agent for customer notes across the range that holds one:
 
 - `SELECT C_NAME, C_COMMENT ... WHERE C_CUSTKEY BETWEEN 400 AND 420` →
   **BLOCKED**, taint 0.85.
-- The same columns on a clean slice → **ALLOWED**, taint 0.00.
+- The same columns on a clean slice → **ALLOWED**, taint 0.00. Any range works
+  so long as it misses `C_CUSTKEY` **412, 1877 and 2504** — those are the only
+  three tainted customer rows, and 412 is the 0.85 one you just blocked.
 
 > "Everyone scans the prompt. The attack isn't in the prompt — it's in a row
 > somebody was allowed to write two years ago. So we scan the rows on the way
