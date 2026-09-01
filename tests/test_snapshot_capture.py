@@ -16,8 +16,9 @@ statements the gateway issues and in what order, not what Exasol replies.
 import pytest
 
 from airlock import policy
-from airlock.statement import Statement
 from airlock.gateway import Airlock
+from airlock.statement import Statement
+from tests.fakes import FakeCatalog
 
 CUSTOMER_UPDATE = "UPDATE TPCH.CUSTOMER SET C_COMMENT = 'x' WHERE C_ACCTBAL > 0"
 
@@ -27,11 +28,13 @@ class FakeConn:
 
     `fail_on` is a substring: any statement containing it raises, which is how
     a snapshot that cannot be taken is simulated without a database.
+
+    It answers nothing about the catalog -- that is `FakeCatalog`'s job, handed
+    to the gateway directly. What is pinned here is which statements AIRLOCK
+    issues and in what order, not how the catalog phrases its lookups.
     """
 
-    def __init__(self, *, key_columns=("C_CUSTKEY",), affected=2729,
-                 policies=None, fail_on=None):
-        self.key_columns = list(key_columns)
+    def __init__(self, *, affected=2729, policies=None, fail_on=None):
         self.affected = affected
         self.policies = policies if policies is not None else []
         self.fail_on = fail_on
@@ -47,13 +50,12 @@ class FakeConn:
         upper = " ".join(query.split()).upper()
         if "FROM AIRLOCK.POLICY" in upper:
             self._answer = list(self.policies)
-        elif "EXA_ALL_CONSTRAINT_COLUMNS" in upper:
-            self._answer = [{"C": c} for c in self.key_columns]
         elif upper.startswith("SELECT COUNT(*)"):
             self._answer = [{"N": self.affected}]
         elif "FROM AIRLOCK.LEDGER ORDER BY SEQ" in upper:
             self._answer = []
         elif "SYSTIMESTAMP" in upper:
+            # The ledger's own timestamp, not a catalog lookup.
             self._answer = [{"T": "2026-09-01 12:00:00.000000"}]
         else:
             self._answer = []
@@ -81,18 +83,21 @@ class FakeConn:
         return entries[0]
 
 
-def _gateway(conn):
+CUSTOMER_KEY = {"TPCH.CUSTOMER": ["C_CUSTKEY"]}
+
+
+def _gateway(conn, keys=None):
     """An Airlock without __init__: constructing one registers a session."""
     gate = Airlock.__new__(Airlock)
     gate.conn = conn
     gate.principal = "demo-agent"
     gate.session_id = "test-session"
-    gate._key_cache = {}
+    gate.catalog = FakeCatalog(keys=CUSTOMER_KEY if keys is None else keys)
     return gate
 
 
-def _blast(conn, sql):
-    gate = _gateway(conn)
+def _blast(conn, sql, keys=None):
+    gate = _gateway(conn, keys)
     return gate._measure_blast_radius(Statement.parse(sql))
 
 
@@ -125,7 +130,7 @@ def test_a_keyless_target_still_captures_because_the_rollback_cites_it():
     """Without a key the compensating statement is prose rather than SQL, but it
     tells the reader the pre-image is in that table. Skipping the capture would
     make the explanation itself false."""
-    _, rollback, snapshot = _blast(FakeConn(key_columns=()), CUSTOMER_UPDATE)
+    _, rollback, snapshot = _blast(FakeConn(), CUSTOMER_UPDATE, keys={})
     assert snapshot is not None
     assert snapshot in rollback
 

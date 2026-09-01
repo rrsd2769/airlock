@@ -22,26 +22,15 @@ import time
 
 import pyexasol
 
+from .catalog import MIN_TEXT_WIDTH, Catalog, TextColumn
 from .db import connect
 
-# An injection needs somewhere to sit. Columns narrower than this hold codes and
-# flags -- phone numbers, priorities, ship modes -- not sentences.
-MIN_TEXT_WIDTH = 20
+__all__ = ["MIN_TEXT_WIDTH", "sweep", "sweep_column", "text_columns", "worst"]
 
 
-def text_columns(conn: pyexasol.ExaConnection, schema: str) -> list[dict]:
+def text_columns(conn: pyexasol.ExaConnection, schema: str) -> list[TextColumn]:
     """Every free-text column in the schema, widest first."""
-    return conn.execute(
-        """
-        SELECT COLUMN_TABLE AS TBL, COLUMN_NAME AS COL, COLUMN_MAXSIZE AS WIDTH
-        FROM SYS.EXA_ALL_COLUMNS
-        WHERE COLUMN_SCHEMA = {schema}
-          AND COLUMN_TYPE LIKE 'VARCHAR%'
-          AND COLUMN_MAXSIZE >= {min_width}
-        ORDER BY COLUMN_MAXSIZE DESC, COLUMN_TABLE, COLUMN_NAME
-        """,
-        {"schema": schema.upper(), "min_width": MIN_TEXT_WIDTH},
-    ).fetchall()
+    return Catalog(conn).text_columns(schema=schema)
 
 
 def sweep_column(conn: pyexasol.ExaConnection, schema: str, table: str,
@@ -81,10 +70,10 @@ def sweep(conn: pyexasol.ExaConnection, schema: str,
     columns = text_columns(conn, schema)
     found = 0
     for c in columns:
-        n = sweep_column(conn, schema.upper(), c["TBL"], c["COL"])
+        n = sweep_column(conn, schema.upper(), c.table, c.name)
         found += n
         if verbose and n:
-            print(f"    {c['TBL'] + '.' + c['COL']:<28} {n} tainted")
+            print(f"    {c.table + '.' + c.name:<28} {n} tainted")
     conn.commit()
     return len(columns), found, time.perf_counter() - started
 
