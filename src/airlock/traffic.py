@@ -126,14 +126,24 @@ def _wide_writes(rng: random.Random) -> list[str]:
         f"UPDATE TPCH.ORDERS SET O_ORDERPRIORITY = '{rng.choice(PRIORITIES)}' "
         f"WHERE O_ORDERSTATUS = '{rng.choice(['O', 'F'])}'",
         f"DELETE FROM TPCH.LINEITEM WHERE L_SHIPMODE = '{rng.choice(SHIPMODES)}'",
+        # A whole nation is ~120 customers here, which is under the 500-row cap:
+        # this used to be allowed, execute, and rewrite the very column the
+        # k-anonymity demo measures its group sizes over. Widen the predicate so
+        # the statement is what this function says it is -- held, not run.
         f"UPDATE TPCH.CUSTOMER SET C_MKTSEGMENT = '{rng.choice(SEGMENTS)}' "
-        f"WHERE C_NATIONKEY = {rng.randint(0, 24)}",
+        f"WHERE C_NATIONKEY < {rng.randint(8, 20)}",
     ]
 
 
 def _narrow_writes(rng: random.Random) -> list[str]:
-    """Single-row corrections. Small enough to pass, and they really execute."""
-    key = rng.randint(2500, 3000)
+    """Single-row corrections. Small enough to pass, and they really execute.
+
+    Because they execute, they must not land on a row the demo depends on.
+    sql/30_taint_seed.sql plants payloads at C_CUSTKEY 412, 1877 and 2504, so
+    the range starts above the last of them -- otherwise a traffic run can
+    quietly overwrite a payload the taint inventory still claims is there.
+    """
+    key = rng.randint(2600, 3000)
     return [
         f"UPDATE TPCH.CUSTOMER SET C_COMMENT = 'verified by agent' "
         f"WHERE C_CUSTKEY = {key}",
