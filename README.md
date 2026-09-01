@@ -76,6 +76,12 @@ before it. Verification is a single analytical query — Exasol's native
 the audit trail never has to leave the database to be trusted, and needs no
 script language container at all.
 
+The hash covers the whole decision, not just its verdict: who ran the statement,
+which rules fired and why, and the measurements the verdict rested on. That last
+part matters because replay re-decides from those measurements — if they sat
+outside the hash, anyone with `UPDATE` on the table could change what a replay
+concludes without breaking a single link.
+
 Then: replay. Because the decision is a pure function of (features, policy set),
 and the ledger already stores the features *and* the measurements, a proposed
 rule change can be re-decided against the entire history without re-running a

@@ -16,12 +16,51 @@ import pyexasol
 GENESIS = "0" * 64
 
 
-def entry_hash(seq: int, session_id: str, ts: str, statement: str,
-               decision: str, prev_hash: str) -> str:
-    """Must stay byte-identical to LEDGER_VERIFY in sql/20_udfs.sql."""
+# Scale used to lift TAINT_MAX (DECIMAL(9,4)) onto an integer before hashing.
+TAINT_SCALE = 10000
+
+
+def _measure(value: float | None, scale: int = 1) -> str:
+    """Render a measurement so Python and Exasol agree on the bytes.
+
+    Exasol trims a scaled DECIMAL on the way to a string -- 0.8500 prints as
+    '0.85' and 0.0000 as '0' -- and reproducing those rules in Python is more
+    fragile than removing the decimal point from both sides. So a scaled column
+    is lifted to an integer first and compared as one.
+
+    NULL renders as the empty string, which is what Exasol's `||` does with a
+    NULL operand anyway.
+    """
+    if value is None:
+        return ""
+    return str(round(float(value) * scale))
+
+
+def entry_hash(seq: int, session_id: str, ts: str, principal: str,
+               stmt_kind: str, statement: str, decision: str,
+               matched_policies: str | None, reason: str | None,
+               est_rows: int | None, min_group: int | None,
+               taint_max: float | None, rollback_sql: str | None,
+               prev_hash: str) -> str:
+    """Must stay byte-identical to LEDGER_CHECK in sql/20_udfs.sql.
+
+    The payload covers everything the decision consists of, not just the verdict:
+    who ran the statement, which rules fired and why, and the measurements the
+    verdict rested on. Those measurements are what `airlock.replay` re-decides
+    from, so leaving them outside the hash would make the replay's inputs
+    rewritable by anyone with UPDATE on the table.
+
+    LATENCY_MS is deliberately outside it. It is telemetry, no decision was ever
+    taken on it, and it is the one column that legitimately differs between two
+    otherwise identical runs.
+    """
     payload = "|".join([
         str(int(seq)), session_id or "", ts or "",
-        statement or "", decision or "", prev_hash or "",
+        principal or "", stmt_kind or "", statement or "", decision or "",
+        matched_policies or "", reason or "",
+        _measure(est_rows), _measure(min_group),
+        _measure(taint_max, TAINT_SCALE),
+        rollback_sql or "", prev_hash or "",
     ])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -53,7 +92,9 @@ def append(conn: pyexasol.ExaConnection, *, session_id: str, principal: str,
     seq = prev_seq + 1
     ts = conn.execute("SELECT TO_CHAR(SYSTIMESTAMP, "
                       "'YYYY-MM-DD HH24:MI:SS.FF6') AS T").fetchone()["T"]
-    digest = entry_hash(seq, session_id, ts, statement, decision, prev_hash)
+    digest = entry_hash(seq, session_id, ts, principal, stmt_kind, statement,
+                        decision, matched_policies, reason, est_rows, min_group,
+                        taint_max, rollback_sql, prev_hash)
 
     conn.execute(
         """
