@@ -48,7 +48,7 @@
     <rect x="3" y="4" width="18" height="16" rx="2"/>
     <path d="M7.5 9.5 10 12l-2.5 2.5M13 15h4"/>
   </symbol>
-  svg>
+svg>
 
 <div class="app">
 
@@ -124,7 +124,8 @@
   </section>
 
   <section class="panel" id="tab-ledger">
-    <div class="controls">
+   <div class="card flush">
+    <div class="head controls">
       <select id="f-decision">
         <option value="">every decision</option>
         <option value="ALLOW">allowed</option>
@@ -142,6 +143,7 @@
         <option value="250">250 rows</option>
         <option value="1000">1000 rows</option>
       </select>
+      <div class="spacer"></div>
       <span class="hint" id="ledger-count"></span>
     </div>
     <div class="scroll">
@@ -154,34 +156,48 @@
         <tbody id="ledger-body"></tbody>
       </table>
     </div>
+   </div>
   </section>
 
   <section class="panel" id="tab-taint">
-    <div class="controls">
-      <span class="hint">
-        The sweep scores every free-text column in the warehouse. These rows carry
-        instructions aimed at whatever agent reads them next &mdash; planted in data,
-        not in a prompt.
-      </span>
+    <!-- Orientation, not data. It explains the page rather than showing it, so
+         it folds like the measurements on Overview do. -->
+    <details class="more">
+      <summary>What this page is showing</summary>
+      <div class="more-body">
+        <div class="hint">
+          The sweep scores every free-text column in the warehouse. These rows carry
+          instructions aimed at whatever agent reads them next &mdash; planted in data,
+          not in a prompt.
+        </div>
+      </div>
+    </details>
+
+    <div class="card flush">
+      <div class="head"><h4>Tainted columns</h4></div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>column</th><th class="num">tainted rows</th><th>worst score</th></tr></thead>
+          <tbody id="taint-cols"></tbody>
+        </table>
+      </div>
     </div>
-    <div class="wrap" style="margin-bottom:22px">
-      <table>
-        <thead><tr><th>column</th><th class="num">tainted rows</th><th>worst score</th></tr></thead>
-        <tbody id="taint-cols"></tbody>
-      </table>
-    </div>
-    <div class="scroll">
-      <table>
-        <thead><tr><th>score</th><th>location</th><th>matched patterns</th><th>payload</th></tr></thead>
-        <tbody id="taint-body"></tbody>
-      </table>
+
+    <div class="card flush">
+      <div class="head"><h4>Tainted rows</h4></div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>score</th><th>location</th><th>matched patterns</th><th>payload</th></tr></thead>
+          <tbody id="taint-body"></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
   <section class="panel" id="tab-replay">
     <div class="replay-grid">
       <div class="card">
-        <h4>Amend the rule set</h4>
+        <div class="head"><h4>Amend the rule set</h4></div>
         <div class="sub">
           Nothing here is written. The amended rules are built in memory and the
           whole ledger is re-decided against them.
@@ -193,16 +209,18 @@
         </div>
       </div>
       <div id="replay-out">
-        <div class="empty">
+        <div class="card"><div class="empty">
           Move a threshold, then run the what-if to see what the change would
           have done to every decision already on record.
-        </div>
+        </div></div>
       </div>
     </div>
   </section>
 
   <section class="panel" id="tab-policies">
-    <div class="scroll">
+    <div class="card flush">
+      <div class="head"><h4>Rules in force</h4></div>
+      <div class="scroll">
       <table>
         <thead><tr>
           <th>#</th><th>name</th><th>kind</th><th>effect</th>
@@ -210,11 +228,14 @@
         </tr></thead>
         <tbody id="policy-body"></tbody>
       </table>
+      </div>
     </div>
   </section>
 
   <section class="panel" id="tab-sessions">
-    <div class="scroll">
+    <div class="card flush">
+      <div class="head"><h4>Agent sessions</h4></div>
+      <div class="scroll">
       <table>
         <thead><tr>
           <th>session</th><th>principal</th><th>started</th>
@@ -222,6 +243,7 @@
         </tr></thead>
         <tbody id="session-body"></tbody>
       </table>
+      </div>
     </div>
   </section>
 </main>
