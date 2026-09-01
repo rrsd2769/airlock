@@ -9,21 +9,10 @@ We also synthesise the compensating statement, so an agent's write has an undo.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import sqlglot
 from sqlglot import exp
 
 from .analyze import Features
-
-
-@dataclass
-class Preflight:
-    affected_rows: int | None = None
-    probe_sql: str | None = None
-    rollback_sql: str | None = None
-    snapshot_table: str | None = None
-    error: str | None = None
 
 
 def build_probe(sql: str) -> str | None:
