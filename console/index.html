@@ -9,11 +9,54 @@
 </head>
 <body>
 
+<!-- Icons are inline symbols, not a font or a package: the console is three
+     static files with no build step, and an icon set that can 404 on stage is
+     exactly the kind of dependency that decision exists to avoid. -->
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-lock" viewBox="0 0 24 24">
+    <rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>
+  </symbol>
+  <symbol id="i-ledger" viewBox="0 0 24 24">
+    <path d="M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>
+    <path d="M14.5 3v4.5H19"/><path d="M8.5 13h7M8.5 16.5h5"/>
+  </symbol>
+  <symbol id="i-taint" viewBox="0 0 24 24">
+    <path d="M12 3.8 2.6 20a1 1 0 0 0 .87 1.5h17.06a1 1 0 0 0 .87-1.5z"/>
+    <path d="M12 9.5v5M12 17.8v.01"/>
+  </symbol>
+  <symbol id="i-replay" viewBox="0 0 24 24">
+    <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>
+  </symbol>
+  <symbol id="i-rules" viewBox="0 0 24 24">
+    <path d="M12 3 5 6v5.5c0 4.3 2.9 8.3 7 9.5 4.1-1.2 7-5.2 7-9.5V6z"/>
+    <path d="m9.2 12.2 2 2 3.6-3.8"/>
+  </symbol>
+  <symbol id="i-sessions" viewBox="0 0 24 24">
+    <rect x="3" y="4" width="18" height="16" rx="2"/>
+    <path d="M7.5 9.5 10 12l-2.5 2.5M13 15h4"/>
+  </symbol>
+  svg>
+
 <div class="app">
 
 <aside class="sidebar" id="sidebar">
-  <div class="brand">AIR<span>LOCK</span></div>
+  <div class="brand">
+    <svg class="ic mark" aria-hidden="true"><use href="#i-lock"></use></svg>
+    <span class="word">AIR<em>LOCK</em></span>
+  </div>
   <div class="tagline">every statement an agent runs, decided and recorded</div>
+  <nav>
+    <button data-tab="ledger" class="on" title="Ledger">
+      <svg class="ic" aria-hidden="true"><use href="#i-ledger"></use></svg><span>Ledger</span></button>
+    <button data-tab="taint" title="Taint inventory">
+      <svg class="ic" aria-hidden="true"><use href="#i-taint"></use></svg><span>Taint inventory</span></button>
+    <button data-tab="replay" title="Policy replay">
+      <svg class="ic" aria-hidden="true"><use href="#i-replay"></use></svg><span>Policy replay</span></button>
+    <button data-tab="policies" title="Rule set">
+      <svg class="ic" aria-hidden="true"><use href="#i-rules"></use></svg><span>Rule set</span></button>
+    <button data-tab="sessions" title="Sessions">
+      <svg class="ic" aria-hidden="true"><use href="#i-sessions"></use></svg><span>Sessions</span></button>
+  </nav>
   <div class="side-foot">
     <span class="pill" id="dsn">&mdash;</span>
   </div>
@@ -22,6 +65,7 @@
 <div class="shell">
 
 <div class="topbar">
+  <div class="crumb">Console <span class="sep">/</span> <b id="crumb">Ledger</b></div>
   <div class="spacer"></div>
   <span class="pill" id="chain"><span class="dot"></span> checking chain</span>
   <button class="ghost" id="refresh">Refresh</button>
@@ -33,14 +77,6 @@
   <div class="bar" id="bar"><i class="a"></i><i class="h"></i><i class="d"></i></div>
   <div class="legend" id="legend"></div>
 </div>
-
-<nav>
-  <button data-tab="ledger" class="on">Ledger</button>
-  <button data-tab="taint">Taint inventory</button>
-  <button data-tab="replay">Policy replay</button>
-  <button data-tab="policies">Rule set</button>
-  <button data-tab="sessions">Sessions</button>
-</nav>
 
 <main>
   <section class="panel on" id="tab-ledger">

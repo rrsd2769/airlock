@@ -298,14 +298,26 @@ const loaders = {
 };
 let activeTab = 'ledger';
 
+// The breadcrumb names the page, so it needs a label per destination rather
+// than the button's text: once the rail collapses to icons there is no text to
+// read off it.
+const LABELS = {
+  ledger: 'Ledger', taint: 'Taint inventory',
+  replay: 'Policy replay', policies: 'Rule set', sessions: 'Sessions',
+};
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('nav button').forEach((x) =>
+    x.classList.toggle('on', x.dataset.tab === tab));
+  document.querySelectorAll('.panel').forEach((p) =>
+    p.classList.toggle('on', p.id === 'tab-' + tab));
+  $('#crumb').textContent = LABELS[tab] || tab;
+  loaders[tab]();
+}
+
 document.querySelectorAll('nav button').forEach((b) => {
-  b.onclick = () => {
-    activeTab = b.dataset.tab;
-    document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
-    document.querySelectorAll('.panel').forEach((p) =>
-      p.classList.toggle('on', p.id === 'tab-' + activeTab));
-    loaders[activeTab]();
-  };
+  b.onclick = () => setTab(b.dataset.tab);
 });
 
 $('#refresh').onclick = () => { loadOverview(); loaders[activeTab](); };
@@ -323,6 +335,7 @@ $('#reset-replay').onclick = () => {
 let typing;
 $('#f-q').oninput = () => { clearTimeout(typing); typing = setTimeout(loadLedger, 260); };
 
+$('#crumb').textContent = LABELS[activeTab];
 loadOverview();
 loadLedger();
 loadPolicies();
