@@ -46,10 +46,14 @@ to it on camera is the ledger's own filters: statement kind `UPDATE`, verdict
 held it, and the generated `MERGE` that would put the 2,729 rows back —
 restoring only the columns the write assigned.
 
-*If a judge asks whether you can run that `MERGE`:* it is generated and recorded
-at decision time, but the pre-image snapshot it reads from is not captured yet,
-so it is an undo that is written down rather than one you can execute. The
-README says the same thing. Do not claim more than that.
+*If a judge asks whether you can run that `MERGE`:* not this one, and the reason
+is the design rather than a gap. **This write was held, so it never executed** —
+there is nothing to undo, and AIRLOCK does not snapshot a write it refuses, or
+every blocked statement would leave a copy of the rows it was not allowed to
+touch. For a write that *is* allowed through, the pre-image is captured before
+it runs and the `MERGE` is runnable; a write whose pre-image cannot be captured
+is refused rather than executed without an undo. What the drawer shows here is
+what would reverse this write had it been approved.
 
 ## 1:50 — Taint (25s)
 

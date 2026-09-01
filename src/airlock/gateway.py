@@ -15,7 +15,7 @@ import pyexasol
 import sqlglot
 from sqlglot import exp
 
-from . import ledger, policy, preflight, taint
+from . import ledger, policy, preflight, snapshots, taint
 from .analyze import analyze
 from .config import settings
 
@@ -72,6 +72,7 @@ class GatewayResult:
     rows: list[dict[str, Any]] | None = None
     truncated: bool = False
     rollback_sql: str | None = None
+    snapshot_table: str | None = None
 
 
 class Airlock:
@@ -106,11 +107,12 @@ class Airlock:
 
         affected = None
         rollback = None
+        snapshot = None
         min_group = None
         taint_max = None
         if decision.effect != policy.DENY and features.kind in {"UPDATE", "DELETE",
                                                                 "INSERT", "MERGE"}:
-            affected, rollback = self._measure_blast_radius(sql, features)
+            affected, rollback, snapshot = self._measure_blast_radius(sql, features)
             # Second pass, now that the radius is a measured fact.
             decision = policy.evaluate(features, policies, affected_rows=affected)
         elif decision.effect != policy.DENY and features.kind == "SELECT":
@@ -127,6 +129,19 @@ class Airlock:
             if measured:
                 decision = policy.evaluate(features, policies, min_group=min_group,
                                            taint_max=taint_max)
+
+        # The compensating statement reads from a pre-image, so take it before the
+        # write runs -- and only once the verdict is ALLOW, or every refused write
+        # would leave a table behind. A capture we cannot take is not a pass: the
+        # write is refused rather than executed without an undo, and the refusal
+        # goes in the ledger, because an entry that says ALLOW for a statement we
+        # then declined to run would be the same lie in a different place.
+        if decision.effect == policy.ALLOW and snapshot is not None:
+            failure = self._capture_pre_image(sql, features, snapshot)
+            if failure is not None:
+                snapshot = None
+                decision.effect = policy.DENY
+                decision.reasons.append(failure)
 
         elapsed = (time.perf_counter() - started) * 1000
         entry = ledger.append(
@@ -150,7 +165,7 @@ class Airlock:
             return GatewayResult(decision=decision.effect, reason=decision.reason_text,
                                  seq=entry.seq, affected_rows=affected,
                                  min_group=min_group, taint_max=taint_max,
-                                 rollback_sql=rollback)
+                                 rollback_sql=rollback, snapshot_table=snapshot)
 
         stmt = self.conn.execute(sql)
 
@@ -159,14 +174,15 @@ class Airlock:
             return GatewayResult(decision=policy.ALLOW, reason=decision.reason_text,
                                  seq=entry.seq, affected_rows=stmt.rowcount(),
                                  min_group=min_group, taint_max=taint_max,
-                                 rollback_sql=rollback)
+                                 rollback_sql=rollback, snapshot_table=snapshot)
 
         rows = stmt.fetchmany(max_rows + 1)
         truncated = len(rows) > max_rows
         return GatewayResult(decision=policy.ALLOW, reason=decision.reason_text,
                              seq=entry.seq, rows=rows[:max_rows], truncated=truncated,
                              affected_rows=affected, min_group=min_group,
-                             taint_max=taint_max, rollback_sql=rollback)
+                             taint_max=taint_max, rollback_sql=rollback,
+                             snapshot_table=snapshot)
 
     def _text_columns(self, features, sql: str) -> tuple[list[str], bool]:
         """The free-text columns this query would return, and whether we know.
@@ -262,20 +278,51 @@ class Airlock:
         value = next(iter(row.values()))
         return int(value) if value is not None else None
 
-    def _measure_blast_radius(self, sql: str, features) -> tuple[int | None, str | None]:
+    def _measure_blast_radius(
+            self, sql: str, features) -> tuple[int | None, str | None, str | None]:
+        """Measured row count, the compensating statement, and the pre-image it needs.
+
+        The third element is the snapshot table to capture, and it is only a name
+        when the compensating statement actually reads from one. An INSERT has no
+        pre-image, and a target with no usable key gets a rollback that explains
+        itself instead of a runnable statement -- in both cases there is nothing
+        to capture, and returning None here is what keeps `submit` from creating
+        a table nothing will ever read.
+        """
         probe = preflight.build_probe(sql)
         if probe is None:
-            return None, None
+            return None, None, None
         try:
             row = self.conn.execute(probe).fetchone()
             affected = int(next(iter(row.values()))) if row else None
         except Exception:
-            return None, None
-        snapshot = f"AIRLOCK.SNAP_{uuid.uuid4().hex[:12].upper()}"
+            return None, None, None
+        snapshot = snapshots.new_name()
         rollback = preflight.build_rollback(
             sql, features, snapshot,
             key_columns=self._key_columns(features.target_table))
-        return affected, rollback
+        needed = snapshot if rollback and snapshot in rollback else None
+        return affected, rollback, needed
+
+    def _capture_pre_image(self, sql: str, features, snapshot: str) -> str | None:
+        """Copy the rows a write is about to change. None on success, else why not.
+
+        The CTAS carries the write's own predicate, so the snapshot holds exactly
+        the rows the compensating statement will read back -- not the whole table.
+        """
+        ctas = preflight.snapshot_sql(features, sql, snapshot)
+        if ctas is None:
+            # build_rollback named a snapshot for a statement snapshot_sql will
+            # not capture. That is a bug in one of the two rather than a runtime
+            # condition, and refusing the write is how it surfaces.
+            return (f"pre-image snapshot: no capture could be built for a "
+                    f"{features.kind} whose rollback reads from {snapshot}")
+        try:
+            self.conn.execute(ctas)
+        except Exception as exc:  # noqa: BLE001 - the reason belongs in the ledger
+            first = str(exc).strip().splitlines()[0][:200]
+            return f"pre-image snapshot into {snapshot} failed: {first}"
+        return None
 
     def _key_columns(self, table: str | None) -> list[str]:
         """Primary key of a write's target, in key order, from the catalog.

@@ -5,7 +5,13 @@ by the demo; what matters here is that the rewrite keeps the parts of the query
 that determine the answer and drops the parts that do not.
 """
 from airlock.analyze import analyze
-from airlock.preflight import build_group_probe, build_probe, build_rollback, build_taint_probe
+from airlock.preflight import (
+    build_group_probe,
+    build_probe,
+    build_rollback,
+    build_taint_probe,
+    snapshot_sql,
+)
 
 
 def test_group_probe_keeps_the_grouping_and_the_filter():
@@ -203,3 +209,55 @@ def test_taint_probe_drops_the_limit_on_every_branch_of_a_union():
         "UNION ALL SELECT S_COMMENT FROM TPCH.SUPPLIER LIMIT 5",
         ["S_COMMENT"])
     assert "LIMIT" not in probe.upper()
+
+
+# ---------------------------------------------------------------------------
+# the pre-image capture
+#
+# The compensating statement is only worth what the snapshot behind it holds,
+# so what the capture selects is as load-bearing as the rollback's own SQL.
+# ---------------------------------------------------------------------------
+
+def _snap(sql, table="AIRLOCK.SNAP_T"):
+    return snapshot_sql(analyze(sql), sql, table)
+
+
+def test_the_capture_keeps_the_predicate_that_chooses_the_rows():
+    """Copying rows the write will not touch is wasted, and copying fewer than
+    it touches leaves part of the change with no way back."""
+    ctas = _snap("UPDATE TPCH.CUSTOMER SET C_COMMENT = 'x' WHERE C_ACCTBAL > 0")
+    assert ctas.startswith("CREATE TABLE AIRLOCK.SNAP_T AS SELECT * FROM TPCH.CUSTOMER")
+    assert "C_ACCTBAL > 0" in ctas
+
+
+def test_the_capture_takes_every_column_not_just_the_assigned_ones():
+    """A DELETE is reversed by putting the whole row back, and an UPDATE's
+    compensating MERGE still has to match on a key it did not assign."""
+    ctas = _snap("UPDATE TPCH.CUSTOMER SET C_COMMENT = 'x' WHERE C_CUSTKEY = 1")
+    assert "SELECT * FROM" in ctas
+
+
+def test_a_delete_captures_the_rows_it_is_about_to_remove():
+    ctas = _snap("DELETE FROM TPCH.ORDERS WHERE O_ORDERKEY < 100")
+    assert "FROM TPCH.ORDERS" in ctas
+    assert "O_ORDERKEY < 100" in ctas
+
+
+def test_an_unfiltered_write_captures_the_whole_table():
+    """No predicate means every row is affected, so every row is the pre-image.
+    Whether that is affordable is the blast radius's decision, not this one."""
+    ctas = _snap("UPDATE TPCH.CUSTOMER SET C_COMMENT = 'x'")
+    assert "WHERE" not in ctas.upper()
+    assert ctas.endswith("FROM TPCH.CUSTOMER")
+
+
+def test_an_insert_has_nothing_to_capture():
+    assert _snap("INSERT INTO TPCH.CUSTOMER (C_CUSTKEY) VALUES (1)") is None
+
+
+def test_a_select_has_nothing_to_capture():
+    assert _snap("SELECT C_NAME FROM TPCH.CUSTOMER") is None
+
+
+def test_an_unparseable_write_captures_nothing_rather_than_guessing():
+    assert _snap("UPDATE TPCH.CUSTOMER SET WHERE WHERE") is None
