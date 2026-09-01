@@ -150,17 +150,27 @@ class Airlock:
         Resolved from the catalog rather than a hardcoded list, so a new table
         needs no change here. A `SELECT *` returns all of them; anything else
         returns only what it names.
+
+        The names come out of the agent's own statement, so they are bound as
+        parameters rather than pasted in. Here that is possible -- this asks the
+        connection directly, not the gateway -- and it is the better answer than
+        the MCP surface's identifier guard, because a legitimately quoted table
+        name still gets scanned instead of being refused.
         """
-        tables = [t for t in features.tables if "." in t]
-        if not tables:
+        pairs = [tuple(t.split(".", 1)) for t in features.tables if "." in t]
+        if not pairs:
             return []
-        pairs = [tuple(t.split(".", 1)) for t in tables]
         predicate = " OR ".join(
-            f"(COLUMN_SCHEMA = '{s}' AND COLUMN_TABLE = '{t}')" for s, t in pairs)
+            f"(COLUMN_SCHEMA = {{s{i}}} AND COLUMN_TABLE = {{t{i}}})"
+            for i in range(len(pairs)))
+        params: dict[str, Any] = {}
+        for i, (schema, table) in enumerate(pairs):
+            params[f"s{i}"], params[f"t{i}"] = schema, table
         rows = self.conn.execute(
             f"SELECT DISTINCT COLUMN_NAME AS C FROM SYS.EXA_ALL_COLUMNS "
             f"WHERE ({predicate}) AND COLUMN_TYPE LIKE 'VARCHAR%' "
-            f"AND COLUMN_MAXSIZE >= {taint.MIN_TEXT_WIDTH}"
+            f"AND COLUMN_MAXSIZE >= {int(taint.MIN_TEXT_WIDTH)}",
+            params,
         ).fetchall()
         available = [r["C"] for r in rows]
         if features.select_star:
