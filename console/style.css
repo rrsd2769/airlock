@@ -97,20 +97,48 @@ body {
 .dot.live { animation: pulse 2.4s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
 
-/* ---------- vitals ---------- */
-.vitals {
-  /* Exactly eight tiles, so pick counts that divide them. auto-fit orphans the
-     last one on its own row at the width the console is filmed at. */
-  display: grid; grid-template-columns: repeat(8, 1fr);
-  gap: 1px; background: var(--line-soft);
-  border-bottom: 1px solid var(--line);
+/* ---------- overview ---------- */
+/* Four, because four verdicts are what the console is for. The other four
+   numbers are measurements behind those verdicts and live in the disclosure
+   at the foot of the page. */
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
+.kpi {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 16px 18px;
 }
-.vital { background: var(--bg); padding: 15px 20px; }
-.vital .n { font: 600 25px/1.15 var(--mono); letter-spacing: -.02em; }
-.vital .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; margin-top: 5px; }
-.vital .n.allow { color: var(--allow); }
-.vital .n.deny { color: var(--deny); }
-.vital .n.hold { color: var(--hold); }
+.kpi .body { flex: 1; min-width: 0; }
+.kpi .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .09em; }
+.kpi .n { font: 600 26px/1.15 var(--mono); letter-spacing: -.02em; margin-top: 5px; }
+.kpi .badge {
+  width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px;
+  display: grid; place-items: center;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+}
+.kpi.allow .n, .kpi.allow .badge { color: var(--allow); }
+.kpi.deny  .n, .kpi.deny  .badge { color: var(--deny); }
+.kpi.hold  .n, .kpi.hold  .badge { color: var(--hold); }
+.kpi.allow .badge { background: #0f2115; border-color: #1d3b25; }
+.kpi.deny  .badge { background: #240f0f; border-color: #4a1f1d; }
+.kpi.hold  .badge { background: #241c0c; border-color: #4a3a12; }
+
+/* Progressive disclosure with no state to manage: <details> is keyboard
+   accessible for free, and the 5s poll rewrites the body's innerHTML rather
+   than the element, so an open panel stays open across a tick. */
+.more { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.more > summary {
+  display: flex; align-items: center; gap: 9px; cursor: pointer;
+  padding: 13px var(--pad); color: var(--muted);
+  font: 500 12.5px var(--sans); list-style: none;
+}
+.more > summary::-webkit-details-marker { display: none; }
+.more > summary::before {
+  content: '\25B8'; display: inline-block; color: var(--dim); transition: transform .15s;
+}
+.more[open] > summary::before { transform: rotate(90deg); }
+.more > summary:hover { color: var(--fg); }
+.more-body { padding: 0 var(--pad) var(--pad); display: grid; gap: 12px; }
 
 .split {
   background: var(--card); border: 1px solid var(--line);
@@ -291,6 +319,9 @@ pre.hash { color: var(--muted); font-size: 11px; }
      ledger, so give up statement text before pushing them off the edge. The
      drawer has the statement in full either way. */
   .sql { max-width: 265px; }
+  /* The badge is decoration and it is what makes a KPI label wrap to two lines
+     once the rail has taken its width. Four numbers on one row matters more. */
+  .kpi .badge { display: none; }
 }
 /* The rail collapses to icons rather than disappearing, because this is the
    band the console is filmed in: the destinations stay legible and the ledger
@@ -310,8 +341,9 @@ pre.hash { color: var(--muted); font-size: 11px; }
   nav button { justify-content: center; padding: 11px 0; }
   nav button span { display: none; }
 }
+@media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .kpis { grid-template-columns: 1fr; } }
 @media (max-width: 700px) {
-  .vitals { grid-template-columns: repeat(2, 1fr); }
   /* Below this the rail costs more than it is worth: lay it across the top and
      let the nav scroll sideways. */
   .app { grid-template-columns: 1fr; }

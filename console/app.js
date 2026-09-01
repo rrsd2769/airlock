@@ -40,6 +40,7 @@ async function loadOverview() {
   const o = await api('/api/overview');
 
   $('#dsn').textContent = o.dsn;
+  const total = Math.max(o.total, 1);
 
   const chain = $('#chain');
   chain.className = 'pill ' + (o.chain_intact ? 'ok' : 'bad');
@@ -47,38 +48,71 @@ async function loadOverview() {
     ? 'hash chain intact'
     : `chain broken at #${esc(o.chain_breaks.map((b) => b.SEQ).join(', '))}`}`;
 
-  const vitals = [
-    ['decisions recorded', fmt(o.total), ''],
-    ['allowed', fmt(o.allow), 'allow'],
-    ['denied', fmt(o.deny), 'deny'],
-    ['held for approval', fmt(o.require_approval), 'hold'],
+  // The four verdict counts land on the page. The four measurements behind them
+  // are still here, one click away, rather than competing with them on sight.
+  const headline = [
+    ['decisions recorded', fmt(o.total), '', 'i-ledger'],
+    ['allowed', fmt(o.allow), 'allow', 'i-allow'],
+    ['denied', fmt(o.deny), 'deny', 'i-deny'],
+    ['held for approval', fmt(o.require_approval), 'hold', 'i-hold'],
+  ];
+  $('#kpis').innerHTML = headline.map(([k, n, cls, icon]) => `
+    <div class="kpi ${cls}">
+      <div class="body"><div class="k">${k}</div><div class="n">${n}</div></div>
+      <div class="badge"><svg class="ic" aria-hidden="true"><use href="#${icon}"></use></svg></div>
+    </div>`).join('');
+
+  const folded = [
     ['group sizes measured', fmt(o.groups_measured), ''],
     ['result sets scanned', fmt(o.taint_scanned), ''],
     ['withheld on taint', fmt(o.taint_withheld), 'deny'],
     ['mean decision', num(o.avg_latency_ms, 1) + ' ms', ''],
   ];
-  $('#vitals').innerHTML = vitals.map(([k, n, cls]) =>
-    `<div class="vital"><div class="n ${cls}">${n}</div><div class="k">${k}</div></div>`).join('');
+  $('#measurements').innerHTML = folded.map(([k, n, cls]) =>
+    `<div><div class="n ${cls}">${n}</div><div class="k">${k}</div></div>`).join('');
 
-  const total = Math.max(o.total, 1);
+  $('#warehouse').innerHTML = `${fmt(o.taint_rows)} tainted rows across `
+    + `${fmt(o.taint_columns)} columns, worst ${num(o.taint_worst)}`;
+
   const bar = $('#bar');
   bar.querySelector('.a').style.width = (o.allow / total * 100) + '%';
   bar.querySelector('.h').style.width = (o.require_approval / total * 100) + '%';
   bar.querySelector('.d').style.width = (o.deny / total * 100) + '%';
 
+  // Shares, not counts. The counts are on the KPI cards directly above, and
+  // printing them again 60px lower was the same three numbers twice.
   $('#legend').innerHTML = [
     ['allow', o.allow, 'allowed through'],
     ['hold', o.require_approval, 'held for a human'],
     ['deny', o.deny, 'refused'],
   ].map(([c, n, label]) =>
-    `<span><i class="key" style="background:var(--${c})"></i>${label} <b>${fmt(n)}</b></span>`
-  ).join('') + `<span style="color:var(--dim)">${fmt(o.taint_rows)} tainted rows across `
-             + `${fmt(o.taint_columns)} columns, worst ${num(o.taint_worst)}</span>`;
+    `<span><i class="key" style="background:var(--${c})"></i>${label} `
+    + `<b>${Math.round(n / total * 100)}%</b></span>`).join('');
 }
 
 /* ---------------- ledger ---------------- */
 
 let selectedSeq = null;
+
+// The Overview's short list. Same rows, same drawer, same escaping -- it is the
+// ledger's head, not a second rendering of it.
+async function loadRecent() {
+  const body = $('#recent-body');
+  try {
+    const d = await api('/api/ledger?limit=8');
+    body.innerHTML = d.rows.map((r) => `
+      <tr data-seq="${r.SEQ}">
+        <td class="num">${r.SEQ}</td>
+        <td class="num">${esc((r.TS || '').slice(11, 23))}</td>
+        <td><span class="kind">${esc(r.STMT_KIND)}</span></td>
+        <td class="sql">${esc(r.STMT_TEXT)}</td>
+        <td><span class="tag ${esc(r.DECISION)}">${esc(r.DECISION)}</span></td>
+      </tr>`).join('');
+    body.querySelectorAll('tr').forEach((tr) =>
+      tr.onclick = () => openEntry(Number(tr.dataset.seq)));
+  } catch (e) { fail(body.parentElement.parentElement, e); }
+}
+
 
 async function loadLedger() {
   const p = new URLSearchParams({
@@ -293,16 +327,17 @@ async function loadSessions() {
 /* ---------------- wiring ---------------- */
 
 const loaders = {
-  ledger: loadLedger, taint: loadTaint, replay: loadPolicies,
-  policies: loadPolicies, sessions: loadSessions,
+  overview: () => { loadOverview(); loadRecent(); },
+  ledger: loadLedger, taint: loadTaint,
+  replay: loadPolicies, policies: loadPolicies, sessions: loadSessions,
 };
-let activeTab = 'ledger';
+let activeTab = 'overview';
 
 // The breadcrumb names the page, so it needs a label per destination rather
 // than the button's text: once the rail collapses to icons there is no text to
 // read off it.
 const LABELS = {
-  ledger: 'Ledger', taint: 'Taint inventory',
+  overview: 'Overview', ledger: 'Ledger', taint: 'Taint inventory',
   replay: 'Policy replay', policies: 'Rule set', sessions: 'Sessions',
 };
 
@@ -320,6 +355,7 @@ document.querySelectorAll('nav button').forEach((b) => {
   b.onclick = () => setTab(b.dataset.tab);
 });
 
+$('#see-all').onclick = () => setTab('ledger');
 $('#refresh').onclick = () => { loadOverview(); loaders[activeTab](); };
 $('#drawer-close').onclick = () => $('#drawer').classList.remove('on');
 document.onkeydown = (e) => { if (e.key === 'Escape') $('#drawer').classList.remove('on'); };
@@ -337,7 +373,7 @@ $('#f-q').oninput = () => { clearTimeout(typing); typing = setTimeout(loadLedger
 
 $('#crumb').textContent = LABELS[activeTab];
 loadOverview();
-loadLedger();
+loadRecent();
 loadPolicies();
 
 // The ledger is append-only and the console is a live view of it. Refreshing the
@@ -345,5 +381,7 @@ loadPolicies();
 // reader, so the feed holds still until the drawer is closed.
 setInterval(() => {
   loadOverview();
-  if (activeTab === 'ledger' && !$('#drawer').classList.contains('on')) loadLedger();
+  if ($('#drawer').classList.contains('on')) return;
+  if (activeTab === 'ledger') loadLedger();
+  if (activeTab === 'overview') loadRecent();
 }, 5000);
