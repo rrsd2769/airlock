@@ -18,6 +18,8 @@ import uuid
 
 import pyexasol
 
+from .catalog import Catalog
+
 SCHEMA = "AIRLOCK"
 PREFIX = "SNAP_"
 
@@ -40,12 +42,7 @@ def listing(conn: pyexasol.ExaConnection) -> list[dict]:
     "which write does this belong to" is the question retention actually turns
     on, and the ledger is the only place that answers it.
     """
-    rows = conn.execute(
-        "SELECT OBJECT_NAME AS NAME, CREATED FROM SYS.EXA_ALL_OBJECTS "
-        "WHERE ROOT_NAME = {schema} AND OBJECT_TYPE = 'TABLE' "
-        "AND OBJECT_NAME LIKE {pattern} ESCAPE '@' ORDER BY CREATED DESC",
-        {"schema": SCHEMA, "pattern": f"{PREFIX[:-1]}@_%"},
-    ).fetchall()
+    rows = Catalog(conn).tables(SCHEMA, prefix=PREFIX)
 
     owners = {}
     for entry in conn.execute(
@@ -53,16 +50,16 @@ def listing(conn: pyexasol.ExaConnection) -> list[dict]:
         "WHERE ROLLBACK_SQL LIKE {pattern} ESCAPE '@'",
         {"pattern": f"%{PREFIX[:-1]}@_%"},
     ).fetchall():
-        for name in {r["NAME"] for r in rows}:
+        for name in {t.name for t in rows}:
             if name in (entry["ROLLBACK_SQL"] or ""):
                 owners[name] = (int(entry["SEQ"]), entry["DECISION"])
 
     out = []
-    for r in rows:
-        seq, decision = owners.get(r["NAME"], (None, None))
-        out.append({"name": r["NAME"], "created": r["CREATED"],
+    for table in rows:
+        seq, decision = owners.get(table.name, (None, None))
+        out.append({"name": table.name, "created": table.created,
                     "seq": seq, "decision": decision,
-                    "rows": _row_count(conn, r["NAME"])})
+                    "rows": _row_count(conn, table.name)})
     return out
 
 
@@ -81,25 +78,13 @@ def prune(conn: pyexasol.ExaConnection, keep_days: int | None,
     Returns the names dropped, so the caller can say what happened rather than
     reporting a count and leaving the reader to trust it.
     """
-    # SYSTIMESTAMP, not CURRENT_TIMESTAMP: the catalog stamps CREATED on the
-    # database clock, while CURRENT_TIMESTAMP is the session's timezone. Compared
-    # against each other, every snapshot looks older or younger than it is by the
-    # session's offset -- which on this host is two hours, and elsewhere is
-    # whatever the client happens to be set to.
-    cutoff = (
-        "" if keep_days is None
-        else f" AND CREATED < SYSTIMESTAMP - INTERVAL '{int(keep_days)}' DAY"
-    )
-    rows = conn.execute(
-        "SELECT OBJECT_NAME AS NAME FROM SYS.EXA_ALL_OBJECTS "
-        "WHERE ROOT_NAME = {schema} AND OBJECT_TYPE = 'TABLE' "
-        f"AND OBJECT_NAME LIKE {{pattern}} ESCAPE '@'{cutoff} ORDER BY CREATED",
-        {"schema": SCHEMA, "pattern": f"{PREFIX[:-1]}@_%"},
-    ).fetchall()
+    # The clock rule that makes `keep_days` mean what it says lives in the
+    # catalog, because this is not the only place that would get it wrong.
+    rows = Catalog(conn).tables(SCHEMA, prefix=PREFIX, older_than_days=keep_days)
 
     dropped = []
-    for r in rows:
-        name = r["NAME"]
+    for table in rows:
+        name = table.name
         if not dry_run:
             conn.execute(f"DROP TABLE {SCHEMA}.{name}")
         dropped.append(name)

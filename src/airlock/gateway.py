@@ -13,7 +13,8 @@ from typing import Any
 
 import pyexasol
 
-from . import ledger, policy, preflight, snapshots, taint
+from . import ledger, policy, preflight, snapshots
+from .catalog import Catalog
 from .config import settings
 from .statement import Statement
 
@@ -60,11 +61,14 @@ class GatewayResult:
 
 class Airlock:
     def __init__(self, conn: pyexasol.ExaConnection, principal: str | None = None,
-                 session_id: str | None = None) -> None:
+                 session_id: str | None = None,
+                 catalog: Catalog | None = None) -> None:
         self.conn = conn
         self.principal = principal or settings.principal
         self.session_id = session_id or uuid.uuid4().hex
-        self._key_cache: dict[str, list[str]] = {}
+        # Taken rather than made, so a test can answer the catalog's four
+        # questions without standing up a database to answer them from.
+        self.catalog = catalog or Catalog(conn)
         self._register_session()
 
     def _register_session(self) -> None:
@@ -180,31 +184,20 @@ class Airlock:
         needs no change here. A `SELECT *` returns all of them; anything else
         returns only what it names.
 
-        The names come out of the agent's own statement, so they are bound as
-        parameters rather than pasted in. Here that is possible -- this asks the
-        connection directly, not the gateway -- and it is the better answer than
-        the MCP surface's identifier guard, because a legitimately quoted table
-        name still gets scanned instead of being refused.
+        Which tables to ask about come out of the agent's own statement, so the
+        binding that keeps a quoted table name from rewriting the predicate is
+        the catalog's job, not this one's.
         """
         features = stmt.features
-        pairs = [tuple(t.split(".", 1)) for t in features.tables
-                 if "." in t and t.split(".", 1)[0] not in SYSTEM_SCHEMAS]
-        if not pairs:
+        targets = [t for t in features.tables
+                   if "." in t and t.split(".", 1)[0] not in SYSTEM_SCHEMAS]
+        if not targets:
             return [], True
         derived = stmt.reads_derived_source
-        predicate = " OR ".join(
-            f"(COLUMN_SCHEMA = {{s{i}}} AND COLUMN_TABLE = {{t{i}}})"
-            for i in range(len(pairs)))
-        params: dict[str, Any] = {}
-        for i, (schema, table) in enumerate(pairs):
-            params[f"s{i}"], params[f"t{i}"] = schema, table
-        rows = self.conn.execute(
-            f"SELECT DISTINCT COLUMN_NAME AS C FROM SYS.EXA_ALL_COLUMNS "
-            f"WHERE ({predicate}) AND COLUMN_TYPE LIKE 'VARCHAR%' "
-            f"AND COLUMN_MAXSIZE >= {int(taint.MIN_TEXT_WIDTH)}",
-            params,
-        ).fetchall()
-        available = [r["C"] for r in rows]
+        available = []
+        for column in self.catalog.text_columns(tables=targets):
+            if column.name not in available:
+                available.append(column.name)
         named = [c for c in available if c in features.columns]
         if not features.select_star:
             return named, True
@@ -282,7 +275,7 @@ class Airlock:
         snapshot = snapshots.new_name()
         rollback = preflight.build_rollback(
             stmt, snapshot,
-            key_columns=self._key_columns(stmt.target_table))
+            key_columns=self.catalog.primary_key(stmt.target_table))
         needed = snapshot if rollback and snapshot in rollback else None
         return affected, rollback, needed
 
@@ -305,29 +298,3 @@ class Airlock:
             first = str(exc).strip().splitlines()[0][:200]
             return f"pre-image snapshot into {snapshot} failed: {first}"
         return None
-
-    def _key_columns(self, table: str | None) -> list[str]:
-        """Primary key of a write's target, in key order, from the catalog.
-
-        The compensating statement has to match each snapshotted pre-image row
-        back to the row the write changed, and the key is what does that. Read
-        from the catalog rather than configured, so a new table needs no change
-        here; cached because a session tends to write to the same few tables.
-        """
-        if not table or "." not in table:
-            return []
-        if table in self._key_cache:
-            return self._key_cache[table]
-        schema, name = table.split(".", 1)
-        try:
-            rows = self.conn.execute(
-                "SELECT COLUMN_NAME AS C FROM SYS.EXA_ALL_CONSTRAINT_COLUMNS "
-                "WHERE CONSTRAINT_SCHEMA = {schema} AND CONSTRAINT_TABLE = {tbl} "
-                "AND CONSTRAINT_TYPE = 'PRIMARY KEY' ORDER BY ORDINAL_POSITION",
-                {"schema": schema, "tbl": name},
-            ).fetchall()
-        except Exception:  # noqa: BLE001 - no key found means a narrower rollback
-            return []
-        keys = [r["C"] for r in rows]
-        self._key_cache[table] = keys
-        return keys
