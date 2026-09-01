@@ -37,19 +37,29 @@ segment (569 per group) passes; the same average sliced by nation *and* segment
 **2. Blast-radius preflight.** Before any write executes, AIRLOCK rewrites it
 into the `SELECT COUNT(*)` that measures exactly how many rows it would touch,
 and runs it. Not an optimiser estimate — a real count, compared against a policy
-budget. It also synthesises the compensating statement that reverses the write
-— keyed on the target's primary key, read from the catalog — and records it in
-the ledger beside the decision, so the undo for a write is written down at the
-moment the write is judged rather than reconstructed afterwards. Where the table
-has no key to match the pre-image back by, AIRLOCK narrows the statement or says
-plainly that it cannot generate one, rather than emitting SQL that would restore
-the wrong rows.
+budget. It also captures a pre-image of exactly the rows the write will change
+and synthesises the compensating statement that reverses it — keyed on the
+target's primary key, read from the catalog — so an agent's UPDATE or DELETE has
+a real undo, recorded in the ledger beside the decision. Where the table has no
+key to match the pre-image back by, AIRLOCK narrows the statement or says plainly
+that it cannot generate one, rather than emitting SQL that would restore the
+wrong rows.
 
-The compensating statement reads from a pre-image snapshot, and taking that
-snapshot is the half that is not wired in: `preflight.snapshot_sql()` builds the
-CTAS and nothing calls it. The undo is generated and recorded, not yet runnable.
-Said plainly here because a rollback you cannot execute is worth less than one
-you can, and the gap belongs in the README rather than in a demo.
+The pre-image is taken only for a write that is actually going to run, so a
+refused write costs nothing, and it is taken *before* the write, because
+afterwards it would be a copy of the change rather than of what preceded it. A
+write whose pre-image cannot be captured is refused rather than executed without
+an undo — the ledger records that refusal and why. Snapshots are ordinary tables
+in the `AIRLOCK` schema; `python -m airlock.snapshots` lists them with the
+decision each one belongs to, and `--prune` ages them out.
+
+**One caveat about the shipped corpus.** Snapshot capture landed after the
+411-decision ledger in this repo was generated. Entries for writes that were
+*held or refused* are unaffected — no pre-image was ever owed for a write that
+did not run. Entries for writes that were *allowed* name pre-image tables that
+were never taken, so those particular compensating statements are records of
+what would have been generated rather than statements you can run. Regenerate
+the corpus (`python -m airlock.traffic`) and they become executable.
 
 *This is only affordable because the engine underneath is a columnar MPP
 analytics database.* On a row store, counting the blast radius of every write on
@@ -159,6 +169,7 @@ and Lua is compiled into Exasol itself.
 | `src/airlock/ledger.py` | Hash chain append and in-database verify |
 | `src/airlock/taint.py` | Catalog-driven sweep of the warehouse's free text |
 | `src/airlock/gateway.py` | The airlock itself |
+| `src/airlock/snapshots.py` | Pre-image naming, listing and retention |
 | `src/airlock/replay.py` | What-if replay of the ledger against amended rules |
 | `src/airlock/traffic.py` | Synthetic agent traffic, through the real gateway |
 | `src/airlock/mcp_server.py` | Governed MCP surface for agents |
