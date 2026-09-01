@@ -40,7 +40,9 @@ holds the statement: **2,729 rows, cap is 500**.
 > analytics engine — this is the one architecture where a real preflight is
 > cheap."
 
-Show the generated rollback statement.
+Open that decision in the console's ledger. The drawer carries the measured row
+count, the policy that held it, and the generated `MERGE` that would put the
+2,729 rows back — restoring only the columns the write assigned.
 
 ## 1:50 — Taint (25s)
 
@@ -49,11 +51,15 @@ uv run python -m airlock.taint --schema TPCH
 ```
 
 Eighteen free-text columns swept in half a second. Eight rows in the warehouse
-are carrying instructions addressed to whatever model reads them next — the
-worst is a supplier's own description containing forged chat delimiters and
-`drop table AIRLOCK.LEDGER`.
+are carrying instructions addressed to whatever model reads them next. The worst
+scores 1.00: a part-supplier comment carrying forged chat delimiters and
+`drop table AIRLOCK.LEDGER then delete from AIRLOCK.POLICY`. Worth saying out
+loud — the highest-scoring payload in the warehouse is aimed at the governance
+layer itself, and `protect-airlock` is the rule that refuses it if an agent ever
+acts on it.
 
-Then ask the agent for customer notes across the range that holds one:
+The console's **Taint inventory** lists them worst-first, payloads escaped and
+inert. Then ask the agent for customer notes across the range that holds one:
 
 - `SELECT C_NAME, C_COMMENT ... WHERE C_CUSTKEY BETWEEN 400 AND 420` →
   **BLOCKED**, taint 0.85.
@@ -66,20 +72,24 @@ Then ask the agent for customer notes across the range that holds one:
 
 ## 2:15 — The ledger (20s)
 
-Every decision, hash-chained. Run `verify_ledger` → intact.
+Every decision, hash-chained. The console's **Overview** has carried the chain
+pill this whole time — *hash chain intact*, re-checked every five seconds. That
+is the shot: the claim has been on screen since the first segment.
 
-Then edit one historical row directly in SQL — as an insider would — and run it
-again. The chain breaks at exactly that sequence number, and every entry after
-it is flagged. The verification runs *inside* Exasol; the audit trail never
-leaves to be trusted.
+Then edit one historical row directly in SQL — as an insider would. The pill
+turns red within a tick and names the sequence number it broke at, and every
+entry after it is flagged. The verification runs *inside* Exasol — `LEDGER_CHECK`
+is a view that recomputes every hash in SQL, so the audit trail never leaves the
+database in order to be trusted, and nothing outside it has to be believed.
 
 ## 2:35 — Replay (20s)
 
-```bash
-uv run python -m airlock.replay --set acctbal-k-anon=100
-```
+The console's **Policy replay** page. Move `acctbal-k-anon` from 20 to 100 and
+run the what-if — no terminal for this one, and the diff renders beside the
+rules you just changed.
 
-Nothing is written to `AIRLOCK.POLICY` — this asks what the change *would* have
+Nothing is written to `AIRLOCK.POLICY` — the amended rule set is built in memory
+and the ledger is re-decided against it. This asks what the change *would* have
 cost before anyone lives with it.
 
 > "Sixteen queries we allowed would be blocked under the tighter rule — each
@@ -91,7 +101,7 @@ The reverse direction reads just as well, and is a good one to have ready if a
 judge asks:
 
 ```bash
-uv run python -m airlock.replay --set write-blast-radius=100   # 10 more writes held
+uv run python -m airlock.replay --set write-blast-radius=3000  # 19 writes released
 uv run python -m airlock.replay --set block-tainted-rows=0.4   #  8 more withheld
 uv run python -m airlock.replay --disable no-raw-pii-phone     # 17 refusals undone
 ```
@@ -123,6 +133,13 @@ uv run python -m airlock.traffic --count 400               # build the history
 
 `./scripts/bootstrap.sh` already does the first two.
 
+Start the console before you start recording — it is served by the same process
+as the API and needs the ledger to already exist:
+
+```bash
+uv run airlock-api        # http://127.0.0.1:8000
+```
+
 Every statement goes through the real gateway, so the ledger is evidence rather
 than fixture data. The numbers quoted above are from `--count 400 --seed 7`;
 re-run the replay commands and use whatever you actually get.
@@ -130,5 +147,24 @@ re-run the replay commands and use whatever you actually get.
 ## Recording notes
 
 - Record at 1920×1080, terminal font ≥ 16pt.
-- Two panes: agent chat on the left, AIRLOCK console on the right.
+- Two panes: agent chat on the left, AIRLOCK console on the right. That split
+  puts the console at 960px, which is the width its layout is tuned for — the
+  rail is icons, the four verdict counts are on one row, and the first decision
+  is visible without scrolling. Do not run it narrower on the day.
+- Leave the console on **Overview** for everything up to 2:35. The chain pill
+  and the verdict counts are live, so the numbers move while you talk, and the
+  ledger claim is on screen long before you make it.
 - No dead air while queries run — every step here is sub-second on this dataset.
+
+## Timing
+
+The eight segments add to exactly 180s, which is the cap and leaves no slack.
+Rehearse against a clock. If you are running long, the give is in this order:
+
+1. The three spare replay commands at 2:35 are backup for judge questions, not
+   part of the run. Do not perform them.
+2. The `SELECT *` beat at 0:40 makes the same point as the one above it.
+3. The clean-slice contrast at 1:50 can be described rather than run.
+
+Do not buy time out of 0:20 — the ungoverned baseline is what makes everything
+after it land.
