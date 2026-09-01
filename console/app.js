@@ -113,7 +113,6 @@ async function loadRecent() {
   } catch (e) { fail(body.parentElement.parentElement, e); }
 }
 
-
 async function loadLedger() {
   const p = new URLSearchParams({
     limit: $('#f-limit').value,
@@ -269,14 +268,14 @@ async function runReplay() {
   const out = $('#replay-out');
   const btn = $('#run-replay');
   if (!Object.keys(sets).length && !disable.length) {
-    out.innerHTML = '<div class="empty">Change a threshold or switch a rule off first '
-                  + '&mdash; replaying the rules as they stand only proves the engine '
-                  + 'still agrees with itself.</div>';
+    out.innerHTML = '<div class="card"><div class="empty">Change a threshold or switch '
+                  + 'a rule off first &mdash; replaying the rules as they stand only '
+                  + 'proves the engine still agrees with itself.</div></div>';
     return;
   }
 
   btn.disabled = true;
-  out.innerHTML = '<div class="empty">re-deciding the whole ledger&hellip;</div>';
+  out.innerHTML = '<div class="card"><div class="empty">re-deciding the whole ledger&hellip;</div></div>';
   try {
     const d = await api('/api/replay', {
       method: 'POST',
@@ -327,11 +326,9 @@ async function loadSessions() {
 /* ---------------- wiring ---------------- */
 
 const loaders = {
-  overview: () => { loadOverview(); loadRecent(); },
-  ledger: loadLedger, taint: loadTaint,
+  overview: loadRecent, ledger: loadLedger, taint: loadTaint,
   replay: loadPolicies, policies: loadPolicies, sessions: loadSessions,
 };
-let activeTab = 'overview';
 
 // The breadcrumb names the page, so it needs a label per destination rather
 // than the button's text: once the rail collapses to icons there is no text to
@@ -340,6 +337,8 @@ const LABELS = {
   overview: 'Overview', ledger: 'Ledger', taint: 'Taint inventory',
   replay: 'Policy replay', policies: 'Rule set', sessions: 'Sessions',
 };
+
+let activeTab = 'overview';
 
 function setTab(tab) {
   activeTab = tab;
@@ -355,16 +354,16 @@ document.querySelectorAll('nav button').forEach((b) => {
   b.onclick = () => setTab(b.dataset.tab);
 });
 
-$('#see-all').onclick = () => setTab('ledger');
 $('#refresh').onclick = () => { loadOverview(); loaders[activeTab](); };
+$('#see-all').onclick = () => setTab('ledger');
 $('#drawer-close').onclick = () => $('#drawer').classList.remove('on');
 document.onkeydown = (e) => { if (e.key === 'Escape') $('#drawer').classList.remove('on'); };
 $('#run-replay').onclick = runReplay;
 $('#reset-replay').onclick = () => {
   renderReplayRules();
-  $('#replay-out').innerHTML = '<div class="empty">Move a threshold, then run the '
-    + 'what-if to see what the change would have done to every decision already '
-    + 'on record.</div>';
+  $('#replay-out').innerHTML = '<div class="card"><div class="empty">Move a threshold, '
+    + 'then run the what-if to see what the change would have done to every '
+    + 'decision already on record.</div></div>';
 };
 
 ['#f-decision', '#f-kind', '#f-limit'].forEach((s) => $(s).onchange = loadLedger);
