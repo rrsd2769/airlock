@@ -48,7 +48,10 @@
     <rect x="3" y="4" width="18" height="16" rx="2"/>
     <path d="M7.5 9.5 10 12l-2.5 2.5M13 15h4"/>
   </symbol>
-svg>
+  <symbol id="i-menu" viewBox="0 0 24 24">
+    <path d="M4 7h16M4 12h16M4 17h16"/>
+  </symbol>
+</svg>
 
 <div class="app">
 
@@ -80,6 +83,13 @@ svg>
 <div class="shell">
 
 <div class="topbar">
+  <!-- Only rendered below 700px, where the rail is off-canvas. Above that the
+       destinations are already on screen and a toggle would be a second way to
+       reach what is not hidden. -->
+  <button class="ghost menu" id="menu" aria-label="Show navigation"
+          aria-expanded="false" aria-controls="sidebar">
+    <svg class="ic" aria-hidden="true"><use href="#i-menu"></use></svg>
+  </button>
   <div class="crumb">Console <span class="sep">/</span> <b id="crumb">Overview</b></div>
   <div class="spacer"></div>
   <span class="pill" id="chain"><span class="dot"></span> checking chain</span>
@@ -250,6 +260,8 @@ svg>
 
 </div><!-- .shell -->
 </div><!-- .app -->
+
+<div class="scrim" id="scrim" aria-hidden="true"></div>
 
 <aside class="drawer" id="drawer">
   <button class="ghost close" id="drawer-close">Close</button>

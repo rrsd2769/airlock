@@ -350,14 +350,43 @@ function setTab(tab) {
   loaders[tab]();
 }
 
+// Below 700px the rail is off-canvas and these three lines are the whole of it:
+// a class on the rail, a class on the scrim, and a truthful aria-expanded. The
+// media query decides whether any of it is visible, so this runs harmlessly at
+// every width and there is no breakpoint to keep in sync from JavaScript.
+function setNav(open) {
+  // Read before the toggle: this is what tells a close at 375px apart from the
+  // same call firing on every nav click at 1600px, where the rail was never
+  // off-canvas and focus must be left alone.
+  const wasOpen = $('#sidebar').classList.contains('open');
+  $('#sidebar').classList.toggle('open', open);
+  $('#scrim').classList.toggle('on', open);
+  $('#menu').setAttribute('aria-expanded', String(open));
+  // Focus follows the rail in and back out again, or a keyboard reader is left
+  // on a button that no longer describes what is on screen.
+  if (open) $('nav button.on').focus();
+  else if (wasOpen) $('#menu').focus();
+}
+
+$('#menu').onclick = () => setNav(!$('#sidebar').classList.contains('open'));
+$('#scrim').onclick = () => setNav(false);
+
 document.querySelectorAll('nav button').forEach((b) => {
-  b.onclick = () => setTab(b.dataset.tab);
+  // Choosing a destination is what the rail was opened for, so it closes itself.
+  b.onclick = () => { setTab(b.dataset.tab); setNav(false); };
 });
 
 $('#refresh').onclick = () => { loadOverview(); loaders[activeTab](); };
 $('#see-all').onclick = () => setTab('ledger');
 $('#drawer-close').onclick = () => $('#drawer').classList.remove('on');
-document.onkeydown = (e) => { if (e.key === 'Escape') $('#drawer').classList.remove('on'); };
+// Escape dismisses the topmost layer only: the rail sits above the drawer when
+// both are open, so closing both at once would take away something the reader
+// did not ask to lose.
+document.onkeydown = (e) => {
+  if (e.key !== 'Escape') return;
+  if ($('#sidebar').classList.contains('open')) setNav(false);
+  else $('#drawer').classList.remove('on');
+};
 $('#run-replay').onclick = runReplay;
 $('#reset-replay').onclick = () => {
   renderReplayRules();
