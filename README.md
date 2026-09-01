@@ -58,7 +58,7 @@ change to any list:
 
 ```bash
 uv run python -m airlock.taint --schema TPCH
-#   18 free-text columns swept in 0.47s
+#   18 free-text columns swept in 0.49s
 ```
 
 And a **per-query scan**: before an allowed `SELECT` releases its rows, AIRLOCK
@@ -83,7 +83,7 @@ single statement of the agent's SQL:
 
 ```bash
 uv run python -m airlock.replay --set acctbal-k-anon=100
-#   replayed 411 decisions: 22 would now be blocked, 0 would now be allowed
+#   replayed 411 decisions: 16 would now be blocked, 0 would now be allowed
 ```
 
 Nothing is written to `AIRLOCK.POLICY`. You find out what a rule change costs

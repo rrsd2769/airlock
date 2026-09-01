@@ -13,7 +13,7 @@ The submission allows a maximum of 3 minutes. This is the running order.
 ## 0:20 — Ungoverned baseline (20s)
 
 Agent connected to the stock MCP server. Ask it for customer contact details.
-It complies instantly. Ask it to clean up some records. It rewrites 2,900 rows.
+It complies instantly. Ask it to clean up some records. It rewrites 2,729 rows.
 No record of either.
 
 ## 0:40 — Same agent, through AIRLOCK (40s)
@@ -33,7 +33,7 @@ Reconnect the agent to the AIRLOCK MCP server. Same two requests.
 ## 1:20 — Blast radius (30s)
 
 The cleanup write. AIRLOCK rewrites it into `SELECT COUNT(*)`, runs it, and
-holds the statement: **2,900 rows, cap is 500**.
+holds the statement: **2,729 rows, cap is 500**.
 
 > "That's not an estimate from the query planner. We counted. We can afford to
 > count on every single write because the thing underneath is a columnar MPP
@@ -82,8 +82,8 @@ uv run python -m airlock.replay --set acctbal-k-anon=100
 Nothing is written to `AIRLOCK.POLICY` — this asks what the change *would* have
 cost before anyone lives with it.
 
-> "Twenty-two queries we allowed would be blocked under the tighter rule — each
-> one a group of 94 people where we now want 100. Loosen it to k=5 instead and 48
+> "Sixteen queries we allowed would be blocked under the tighter rule — each
+> one a group of 94 people where we now want 100. Loosen it to k=5 instead and 49
 > statements we refused would have passed. That's the entire decision history
 > re-decided, and it comes back instantly."
 
@@ -93,7 +93,7 @@ judge asks:
 ```bash
 uv run python -m airlock.replay --set write-blast-radius=100   # 10 more writes held
 uv run python -m airlock.replay --set block-tainted-rows=0.4   #  8 more withheld
-uv run python -m airlock.replay --disable no-raw-pii-phone     # 19 refusals undone
+uv run python -m airlock.replay --disable no-raw-pii-phone     # 17 refusals undone
 ```
 
 Every threshold in the policy set is replayable, because every measurement the
