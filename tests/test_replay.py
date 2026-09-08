@@ -4,8 +4,8 @@ These run without a database: `amend` is list manipulation and `evaluate` is
 pure, which together are the whole of replay's decision path.
 """
 from airlock.analyze import analyze
-from airlock.policy import ALLOW, DENY, evaluate
-from airlock.replay import amend, _features_from_json
+from airlock.policy import ALLOW, DENY, REQUIRE_APPROVAL, evaluate
+from airlock.replay import amend, replay, _features_from_json
 
 
 def policy(**kw):
@@ -56,3 +56,52 @@ def test_a_replayed_decision_matches_a_live_one():
     live = evaluate(analyze(sql), p, min_group=94)
     replayed = evaluate(_features_from_json(analyze(sql).to_json()), p, min_group=94)
     assert live.effect == replayed.effect == ALLOW
+
+
+class FakeLedger:
+    """Just enough connection to answer replay's single query.
+
+    Replay reads the ledger and nothing else, so a double that returns rows is
+    the whole of the seam. `persist=False` keeps `conn.ext` out of it.
+    """
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.asked = ""
+
+    def execute(self, sql, params=None):
+        self.asked = sql
+        return self
+
+    def fetchall(self):
+        return self.rows
+
+
+def entry(seq, sql, *, decision, approval_id=None, est=None, grp=None, taint=None):
+    return {"SEQ": seq, "FEATURES": analyze(sql).to_json(), "DECISION": decision,
+            "EST_ROWS": est, "MIN_GROUP": grp, "TAINT_MAX": taint,
+            "APPROVAL_ID": approval_id}
+
+
+WIDE_WRITE = "UPDATE TPCH.ORDERS SET O_SHIPPRIORITY = 1 WHERE O_ORDERSTATUS = 'P'"
+HOLD_BIG_WRITES = policy(NAME="write-blast-radius", RULE_KIND="BLAST_RADIUS",
+                         EFFECT=REQUIRE_APPROVAL, THRESHOLD=500)
+
+
+def test_an_approved_release_is_replayed_as_approved():
+    """A release is ALLOW only because a human said so, and the amended rule
+    set does not withdraw that. Replaying it without the approval would report
+    every approved write in the history as newly blocked, under any amendment
+    at all -- including ones that cannot touch a write."""
+    conn = FakeLedger([entry(1, WIDE_WRITE, decision=ALLOW, approval_id=7, est=738)])
+    diff = replay(conn, "demo-agent", policies=[HOLD_BIG_WRITES], persist=False)
+    assert diff.newly_blocked == 0
+    assert diff.changed == 0
+
+
+def test_the_same_statement_without_an_approval_is_still_held():
+    """The other half of the pair: the join is what makes the difference, not
+    a blanket exemption for writes."""
+    conn = FakeLedger([entry(1, WIDE_WRITE, decision=ALLOW, est=738)])
+    diff = replay(conn, "demo-agent", policies=[HOLD_BIG_WRITES], persist=False)
+    assert diff.newly_blocked == 1

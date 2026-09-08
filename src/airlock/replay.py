@@ -4,7 +4,8 @@ Change a policy, then re-decide the entire history against the new rules and
 diff the outcome: "this change would have blocked 34 previously-allowed queries
 and unblocked 6."
 
-This works because `policy.evaluate` is a pure function of (features, policies).
+This works because `policy.evaluate` is a pure function of (features, policies,
+approval).
 The ledger already stores the features and the measurements -- the blast radius,
 the smallest group, and the worst taint score -- so replay never re-parses SQL
 and never touches the underlying tables. It is an analytical scan over the ledger, which is exactly
@@ -83,8 +84,17 @@ def replay(conn: pyexasol.ExaConnection, principal: str,
         policies = load_policies(conn, principal)
     replay_id = uuid.uuid4().hex
 
-    sql = ("SELECT SEQ, FEATURES, DECISION, EST_ROWS, MIN_GROUP, TAINT_MAX "
-           "FROM AIRLOCK.LEDGER WHERE FEATURES IS NOT NULL ORDER BY SEQ")
+    # The approval is the third input to the decision, alongside the features
+    # and the rules, and an entry that only came back ALLOW because a human
+    # released it must be re-decided as released. Without the join every
+    # approved write in the history reads as "would now be blocked" under any
+    # amendment at all -- the answer to a question nobody asked.
+    sql = ("SELECT l.SEQ, l.FEATURES, l.DECISION, l.EST_ROWS, l.MIN_GROUP, "
+           "l.TAINT_MAX, a.APPROVAL_ID "
+           "FROM AIRLOCK.LEDGER l "
+           "LEFT JOIN AIRLOCK.APPROVAL a "
+           "  ON a.RESULT_SEQ = l.SEQ AND a.APPROVAL_STATE = 'APPROVED' "
+           "WHERE l.FEATURES IS NOT NULL ORDER BY l.SEQ")
     if limit:
         sql += f" LIMIT {int(limit)}"
 
@@ -100,7 +110,8 @@ def replay(conn: pyexasol.ExaConnection, principal: str,
         grp = int(row["MIN_GROUP"]) if row["MIN_GROUP"] is not None else None
         tnt = float(row["TAINT_MAX"]) if row["TAINT_MAX"] is not None else None
         new_decision = evaluate(features, policies, affected_rows=est, min_group=grp,
-                                taint_max=tnt)
+                                taint_max=tnt,
+                                approved=row.get("APPROVAL_ID") is not None)
         new = new_decision.effect
         did_change = new != old
         if did_change:
