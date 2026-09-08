@@ -23,7 +23,7 @@ import time
 import pyexasol
 
 from .catalog import MIN_TEXT_WIDTH, Catalog, TextColumn
-from .db import connect
+from .db import connect_admin
 
 __all__ = ["MIN_TEXT_WIDTH", "sweep", "sweep_column", "text_columns", "worst"]
 
@@ -93,7 +93,12 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=10)
     args = parser.parse_args()
 
-    conn = connect()
+    # sys rather than the gateway's identity: this sweeps every free-text
+    # column in a schema, and scoping it to what the gateway happens to be
+    # granted would mean a newly added table silently drops out of the
+    # inventory -- the same quiet blindness that makes an ungranted table
+    # invisible in SYS.EXA_ALL_COLUMNS.
+    conn = connect_admin()
     print(f"Sweeping {args.schema.upper()} ...")
     n_cols, n_found, seconds = sweep(conn, args.schema, verbose=True)
 

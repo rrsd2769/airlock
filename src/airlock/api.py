@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from . import ledger
 from . import replay as replay_mod
 from .config import settings
-from .db import connect
+from .db import connect_console
 
 CONSOLE_DIR = Path(__file__).resolve().parents[2] / "console"
 
@@ -53,7 +53,7 @@ def _db() -> pyexasol.ExaConnection:
             return _conn
         except Exception:
             _conn = None
-    _conn = connect()
+    _conn = connect_console()
     return _conn
 
 

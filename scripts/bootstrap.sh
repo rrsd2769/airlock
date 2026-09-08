@@ -34,6 +34,10 @@ echo "    Lua is compiled into Exasol; no script language container is needed."
 step "Creating schema, UDFs, and policies (this resets the ledger)"
 uv run python scripts/apply_sql.py sql/00_schema.sql sql/20_udfs.sql sql/10_policies.sql
 
+step "Creating the least-privilege identities and safe views"
+uv run python scripts/apply_sql.py sql/40_identities.sql
+uv run python -m airlock.identities --apply
+
 step "Planting the demo's injected rows"
 uv run python scripts/apply_sql.py sql/30_taint_seed.sql
 
