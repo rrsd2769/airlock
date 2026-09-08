@@ -324,6 +324,20 @@ tbody tr.sel { background: #12212a; }
 .rm { margin-top: 9px; color: var(--dim); font: 11px var(--mono); }
 /* No rule behind it -- "no policy matched" and anything else the composer
    emitted as prose. Stated, not dressed up as a finding. */
+/* The drawer's approval block. Scoped to #drawer: an unscoped rule here would
+   reach the ledger and taint tables on the same page. */
+#drawer .appr { border-left: 2px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--panel-2); padding: 12px 14px; font-size: 13px;
+  color: var(--muted); line-height: 1.55; }
+#drawer .appr.hold { border-left-color: var(--hold); }
+#drawer .appr.done { border-left-color: var(--allow); }
+#drawer .appr.no { border-left-color: var(--deny); }
+#drawer .appr b { color: var(--hold); font-weight: 600; }
+#drawer .appr code { font-family: var(--mono); font-size: 12px; color: var(--fg); }
+#drawer .appr a { color: var(--accent); text-decoration: none;
+  border-bottom: 1px solid #4dd4c455; }
+#drawer .appr a:hover { border-bottom-color: var(--accent); }
+
 .reason.quiet { border-left-color: var(--line); color: var(--muted); font-size: 13px; }
 pre {
   margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm);

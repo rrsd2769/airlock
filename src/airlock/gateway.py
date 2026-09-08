@@ -45,6 +45,26 @@ def _wants_taint_scan(features, policies: list[dict]) -> bool:
     return any(p["RULE_KIND"] == "TAINT_BLOCK" for p in policies)
 
 
+@dataclass(frozen=True)
+class Approval:
+    """A human's release of a held statement, carried into the run it authorises.
+
+    It travels as a value rather than a boolean because the ledger has to record
+    *who* released the statement, and REASON is the only column that can carry
+    that: the hash payload in `ledger.entry_hash` is frozen byte-for-byte
+    against LEDGER_CHECK in sql/20_udfs.sql, so a new column for provenance
+    would either sit outside the hash -- rewritable by anyone with UPDATE -- or
+    force the whole corpus to be re-hashed.
+    """
+
+    approval_id: int
+    approver: str
+
+    @property
+    def provenance(self) -> str:
+        return f"approved: approval #{self.approval_id} by {self.approver}"
+
+
 @dataclass
 class GatewayResult:
     decision: str
@@ -134,14 +154,43 @@ class Airlock:
             {"sid": self.session_id, "principal": self.principal, "exa": str(exa)},
         )
 
-    def submit(self, sql: str, max_rows: int = 200) -> GatewayResult:
+    def _raise_approval(self, seq: int) -> None:
+        """Put a held statement on the queue a human can release it from.
+
+        Raised by the gateway at the moment of the hold rather than assembled
+        later from the ledger, because the ledger cannot tell a hold that is
+        still waiting from one that was already released -- the release is a
+        separate entry and the held one is never edited to point at it. The
+        queue row is the only thing that carries that link.
+        """
+        self.conn.execute(
+            "INSERT INTO AIRLOCK.APPROVAL (LEDGER_SEQ, APPROVAL_STATE) "
+            "VALUES ({seq}, 'PENDING')",
+            {"seq": seq},
+        )
+
+    def submit(self, sql: str, max_rows: int = 200,
+               approval: Approval | None = None) -> GatewayResult:
+        """Run one statement through the airlock.
+
+        `approval` is a released hold coming back for its second attempt. It
+        re-enters here rather than being executed directly by whoever approved
+        it, and that is the whole design of the approval loop: the pre-image
+        capture below is gated on the verdict being ALLOW, so a statement
+        executed around this method would run with no undo. Everything else the
+        gateway does -- re-measuring the radius against the table as it is now,
+        appending to the ledger -- happens again too, on purpose. An approval is
+        permission to run the statement, not a recording of what it would have
+        done an hour ago.
+        """
         started = time.perf_counter()
         stmt = Statement.parse(sql)
         features = stmt.features
         policies = policy.load_policies(self.conn, self.principal)
+        approved = approval is not None
 
         # First pass: everything decidable from the statement alone.
-        decision = policy.evaluate(features, policies)
+        decision = policy.evaluate(features, policies, approved=approved)
 
         measured_facts = Measurements()
         if decision.effect != policy.DENY and features.kind in {"UPDATE", "DELETE",
@@ -150,7 +199,8 @@ class Airlock:
              measured_facts.snapshot_table) = self._measure_blast_radius(stmt)
             # Second pass, now that the radius is a measured fact.
             decision = policy.evaluate(features, policies,
-                                       affected_rows=measured_facts.affected_rows)
+                                       affected_rows=measured_facts.affected_rows,
+                                       approved=approved)
         elif decision.effect != policy.DENY and features.kind == "SELECT":
             measured = False
             # k-anonymity is a claim about group sizes, so measure them rather
@@ -165,7 +215,15 @@ class Airlock:
             if measured:
                 decision = policy.evaluate(features, policies,
                                            min_group=measured_facts.min_group,
-                                           taint_max=measured_facts.taint_max)
+                                           taint_max=measured_facts.taint_max,
+                                           approved=approved)
+
+        # Who released it, in the one field the ledger hashes and replay reads
+        # back. Appended after the last evaluate pass so it cannot be mistaken
+        # for a rule that fired, and before the capture below so a failed
+        # snapshot still has the last word on why an approved write did not run.
+        if approval is not None:
+            decision.reasons.append(approval.provenance)
 
         # The compensating statement reads from a pre-image, so take it before the
         # write runs -- and only once the verdict is ALLOW, or every refused write
@@ -197,6 +255,9 @@ class Airlock:
             taint_max=measured_facts.taint_max,
             latency_ms=elapsed,
         )
+
+        if decision.effect == policy.REQUIRE_APPROVAL:
+            self._raise_approval(entry.seq)
 
         if decision.effect != policy.ALLOW:
             return measured_facts.refused(decision, entry.seq)

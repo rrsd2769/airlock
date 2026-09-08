@@ -81,6 +81,13 @@ GRANT SELECT, INSERT ON AIRLOCK.AGENT_SESSION TO AIRLOCK_SVC;
 GRANT SELECT, INSERT, DELETE ON AIRLOCK.TAINT TO AIRLOCK_SVC;
 GRANT SELECT, INSERT ON AIRLOCK.REPLAY_RESULT TO AIRLOCK_SVC;
 
+-- The approval queue. UPDATE is here and nowhere else in the gateway's grant
+-- set: a held statement's own ledger row stays untouchable, and what an
+-- approval rewrites is this row -- its state, who decided, and which ledger
+-- entry the release produced. The console reaches it through the schema-level
+-- SELECT below, which covers tables added after the grant was issued.
+GRANT SELECT, INSERT, UPDATE ON AIRLOCK.APPROVAL TO AIRLOCK_SVC;
+
 -- A script needs an explicit EXECUTE grant. SCAN_TAINT is on the hot path --
 -- preflight builds every taint probe around it -- so without this each scan
 -- fails and each scanned statement is held at TAINT_UNMEASURED.

@@ -31,8 +31,26 @@ class Decision:
     effect: str = ALLOW
     reasons: list[str] = field(default_factory=list)
     matched: list[int] = field(default_factory=list)
+    # A human has released this statement's holds. See apply().
+    approved: bool = False
 
     def apply(self, effect: str, reason: str, policy_id: int) -> None:
+        """Fold one matched rule into the verdict. Most restrictive wins.
+
+        An approval is honoured here rather than at the call sites because
+        REQUIRE_APPROVAL arrives from two directions -- as a policy row's own
+        EFFECT, on any rule kind, and as the literal verdict the three
+        unmeasurable-fact branches raise -- and a demotion written at each of
+        those would be a list to keep in step with every rule added later. It
+        is one rule here: an approved hold becomes an allowance, and DENY never
+        passes through this branch at all.
+
+        The reason survives the demotion. An approved statement's ledger entry
+        still says which rules held it and why; what changed is that a human
+        answered them, not that they stopped applying.
+        """
+        if self.approved and effect == REQUIRE_APPROVAL:
+            effect = ALLOW
         if _RANK[effect] > _RANK[self.effect]:
             self.effect = effect
         self.reasons.append(reason)
@@ -65,13 +83,23 @@ def load_policies(conn: pyexasol.ExaConnection, principal: str) -> list[dict]:
 def evaluate(features: Features, policies: list[dict], *,
              affected_rows: int | None = None,
              min_group: int | None = None,
-             taint_max: float | None = None) -> Decision:
+             taint_max: float | None = None,
+             approved: bool = False) -> Decision:
     """Pure function: features + policy set -> decision.
 
     Pure on purpose. Replay feeds historical features and a new policy set
     through this same function to answer 'what would this change have blocked?'
+
+    `approved` says a human has released this statement's holds. It demotes
+    matched REQUIRE_APPROVAL rules to ALLOW and leaves DENY exactly where it
+    was -- an approver is releasing a hold, not overruling a prohibition, and a
+    statement that was held *and* denied stays denied. That asymmetry is the
+    whole reason approval is a parameter here rather than a check the gateway
+    does to the verdict afterwards: from the outside, a decision can only be
+    read as one effect, and 'ALLOW unless something also denied it' is not a
+    thing a caller can reconstruct from it.
     """
-    d = Decision()
+    d = Decision(approved=approved)
 
     # An unparseable statement is never waved through.
     if features.parse_error:
