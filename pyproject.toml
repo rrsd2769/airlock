@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 airlock-mcp = "airlock.mcp_server:main"
 airlock-api = "airlock.api:main"
+airlock-approve = "airlock.approve_api:main"
 
 [dependency-groups]
 dev = ["pytest>=8.3", "ruff>=0.7"]

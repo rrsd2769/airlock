@@ -67,6 +67,35 @@ CREATE OR REPLACE TABLE LEDGER (
 );
 
 -------------------------------------------------------------------------------
+-- APPROVAL: the queue of held statements waiting on a human.
+--
+-- REQUIRE_APPROVAL was a verdict with nowhere to go. A row here is raised by
+-- the gateway the moment a statement is held, and an approval releases it back
+-- through the gateway rather than executing it directly -- so the released run
+-- gets its own policy pass, its own pre-image capture and its own ledger entry.
+--
+-- LEDGER_SEQ points at the entry that was held and RESULT_SEQ at the entry of
+-- the release. Two entries, never one edited: the held record is what the hash
+-- chain is protecting, and rewriting it to say ALLOW would make the chain worth
+-- nothing.
+-------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE APPROVAL (
+    APPROVAL_ID     DECIMAL(18,0)  IDENTITY,
+    LEDGER_SEQ      DECIMAL(18,0)  NOT NULL,   -- the entry that was held
+    -- Not STATE: that is a reserved word in Exasol and the CREATE is a
+    -- syntax error, not a quoted-identifier column.
+    APPROVAL_STATE  VARCHAR(20)    NOT NULL,   -- PENDING | APPROVED | REJECTED
+    -- SYSTIMESTAMP, not CURRENT_TIMESTAMP: the ledger stamps its entries in UTC
+    -- and the drawer shows a hold's queue row beside the entry that raised it.
+    -- On a session with an offset, the same event reads two hours apart.
+    REQUESTED_AT    TIMESTAMP      DEFAULT SYSTIMESTAMP,
+    DECIDED_BY      VARCHAR(128),
+    DECIDED_AT      TIMESTAMP,
+    NOTE            VARCHAR(2000),
+    RESULT_SEQ      DECIMAL(18,0)              -- the ledger entry of the release
+);
+
+-------------------------------------------------------------------------------
 -- TAINT: rows in the warehouse that carry embedded instructions.
 -- Populated by a parallel Python SET UDF sweep (see sql/20_udfs.sql).
 -------------------------------------------------------------------------------

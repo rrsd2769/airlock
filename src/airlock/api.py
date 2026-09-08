@@ -222,6 +222,31 @@ def ledger_entry(seq: int) -> dict:
     return row
 
 
+@app.get("/api/approvals")
+def approvals() -> dict:
+    """The approval queue, read-only.
+
+    The console says a statement is waiting and where it can be released; it
+    cannot release one. That is the point of this route existing here as a
+    SELECT while every deciding route lives on a different port behind a token
+    -- see approve_api.py. A console left open on a screen must not be a second
+    door through the airlock.
+
+    Keyed by both sequence numbers, because a release is a separate ledger entry
+    and the drawer has to be able to say "held, and released as #414" on one and
+    "this is the release of #411" on the other.
+    """
+    rows = _rows(
+        """
+        SELECT APPROVAL_ID, LEDGER_SEQ, APPROVAL_STATE, REQUESTED_AT,
+               DECIDED_BY, DECIDED_AT, NOTE, RESULT_SEQ
+        FROM AIRLOCK.APPROVAL ORDER BY APPROVAL_ID DESC
+        """
+    )
+    return {"pending": sum(1 for r in rows if r["APPROVAL_STATE"] == "PENDING"),
+            "rows": rows}
+
+
 @app.get("/api/policies")
 def policies() -> list[dict]:
     """The rule set as it stands. The console never writes to this table."""

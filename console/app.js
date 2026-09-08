@@ -197,6 +197,67 @@ const ruleKind = (k) => String(k || '').toLowerCase().replace(/_/g, ' ');
 const threshold = (t) => (t === null || t === undefined) ? null
   : `threshold ${Number(t)}`;
 
+// Where a held statement stands, read out of AIRLOCK.APPROVAL.
+//
+// Read-only, and it says so. Releasing a statement runs agent SQL and writes to
+// the database; the console is a surface where every route is a SELECT, and the
+// moment it grew a release button that would stop being true. So this block
+// tells the reader where approval happens rather than offering to do it.
+//
+// A held entry and its release are two separate ledger entries -- the first is
+// never edited -- so the queue row is looked up by both sequence numbers and
+// each end of the pair points at the other.
+function approvalFor(entry, rows) {
+  const seq = Number(entry.SEQ);
+  const held = rows.find((r) => Number(r.LEDGER_SEQ) === seq);
+  const release = rows.find((r) => Number(r.RESULT_SEQ) === seq);
+
+  if (release) {
+    return field('approval', `<div class="appr done">
+      Released hold #${release.APPROVAL_ID} on
+      <a href="#" data-seq="${Number(release.LEDGER_SEQ)}">decision
+      #${Number(release.LEDGER_SEQ)}</a>, approved by
+      ${esc(release.DECIDED_BY || 'unknown')}. That entry stands as recorded;
+      this one is what running it actually did.</div>`);
+  }
+
+  if (held && held.APPROVAL_STATE === 'PENDING') {
+    return field('approval', `<div class="appr hold">
+      <b>Awaiting approval</b> since ${esc(held.REQUESTED_AT)} &middot; request
+      #${held.APPROVAL_ID}. Released on the approval desk
+      (<code>airlock-approve</code>, port 8001), which sends the statement back
+      through the gateway. The console watches; it does not release.</div>`);
+  }
+
+  if (held && held.APPROVAL_STATE === 'APPROVED') {
+    return field('approval', `<div class="appr done">
+      Approved by ${esc(held.DECIDED_BY || 'unknown')} at
+      ${esc(held.DECIDED_AT || '')}${held.RESULT_SEQ !== null &&
+        held.RESULT_SEQ !== undefined
+        ? `, released as <a href="#" data-seq="${Number(held.RESULT_SEQ)}">decision
+           #${Number(held.RESULT_SEQ)}</a>` : ''}.
+      ${held.NOTE ? esc(held.NOTE) : ''}</div>`);
+  }
+
+  if (held && held.APPROVAL_STATE === 'REJECTED') {
+    return field('approval', `<div class="appr no">
+      Refused by ${esc(held.DECIDED_BY || 'unknown')} at
+      ${esc(held.DECIDED_AT || '')}. Nothing ran, and no further entry was
+      written -- the hold above is the whole record.
+      ${held.NOTE ? esc(held.NOTE) : ''}</div>`);
+  }
+
+  if (entry.DECISION === 'REQUIRE_APPROVAL') {
+    return field('approval', `<div class="appr hold">
+      Held. Approval is granted on the approval desk
+      (<code>airlock-approve</code>, port 8001), never here.</div>`);
+  }
+  return '';
+}
+
+const field = (label, body) =>
+  `<div class="field"><div class="k">${label}</div>${body}</div>`;
+
 async function openEntry(seq) {
   selectedSeq = seq;
   document.querySelectorAll('#ledger-body tr').forEach((tr) =>
@@ -208,7 +269,14 @@ async function openEntry(seq) {
   out.innerHTML = '<div class="empty">loading&hellip;</div>';
 
   try {
-    const e = await api('/api/ledger/' + seq);
+    // Two fetches rather than one: the queue is a separate read-only route, so
+    // a drawer opened while the approval desk is down still renders the
+    // decision itself. An empty queue and an unreachable one look the same
+    // here on purpose -- neither is a claim about the entry.
+    const [e, queue] = await Promise.all([
+      api('/api/ledger/' + seq),
+      api('/api/approvals').catch(() => ({ rows: [] })),
+    ]);
 
     // Why first, and largest. It is the one thing a viewer of this console is
     // actually asking the ledger, and it used to sit fourth behind the SQL.
@@ -225,6 +293,8 @@ async function openEntry(seq) {
           <div class="rm">${meta}</div>
         </div>`;
     }).join('');
+
+    const appr = approvalFor(e, queue.rows || []);
 
     const measured = [
       ['rows affected', fmt(e.EST_ROWS)],
@@ -245,6 +315,8 @@ async function openEntry(seq) {
       <div class="field"><div class="k">why</div>
         <div class="reasons">${why}</div></div>
 
+      ${appr}
+
       <div class="field"><div class="k">statement</div><pre>${esc(e.STMT_TEXT)}</pre></div>
 
       <div class="field"><div class="k">measured before deciding</div>
@@ -252,6 +324,11 @@ async function openEntry(seq) {
           `<div><div class="n">${v}</div><div class="k">${k}</div></div>`).join('')}</div></div>
 
       ${e.ROLLBACK_SQL ? `<div class="field"><div class="k">compensating statement</div><pre>${esc(e.ROLLBACK_SQL)}</pre></div>` : ''}`;
+    // The two halves of one decision link to each other, so a viewer can walk
+    // from a hold to what running it did without going back to the table.
+    out.querySelectorAll('.appr a[data-seq]').forEach((a) => {
+      a.onclick = (ev) => { ev.preventDefault(); openEntry(Number(a.dataset.seq)); };
+    });
   } catch (e) { fail(out, e); }
 }
 
