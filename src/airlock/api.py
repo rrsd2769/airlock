@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from . import ledger
 from . import replay as replay_mod
+from . import sessions as sessions_mod
 from .config import settings
 from .db import connect_console
 
@@ -122,6 +123,11 @@ def overview() -> dict:
     withheld = _one("SELECT COUNT(*) AS N FROM AIRLOCK.LEDGER "
                     "WHERE TAINT_MAX >= 0 AND DECISION <> 'ALLOW'") or {}
 
+    # Live, not historical. Exasol Personal has no SQL audit to reconcile
+    # against, so "is anything going around us" is a question about now.
+    with _lock:
+        ungoverned = sessions_mod.ungoverned_count(_db())
+
     return {
         "total": stats.get("TOTAL", 0),
         "allow": by_decision.get("ALLOW", 0),
@@ -139,6 +145,7 @@ def overview() -> dict:
         "taint_rows": taint_rows.get("N", 0),
         "taint_columns": taint_rows.get("C", 0),
         "taint_worst": taint_rows.get("WORST"),
+        "ungoverned": ungoverned,
         "dsn": settings.dsn,
     }
 
@@ -262,6 +269,29 @@ def sessions() -> list[dict]:
         ORDER BY LAST_SEEN DESC NULLS LAST
         """
     )
+
+
+@app.get("/api/sessions/live")
+def live_sessions() -> dict:
+    """Every connection Exasol currently has, and which came through us.
+
+    The tab's other table answers "what did the airlock allow"; this one answers
+    "what is connected at all". The gap between them is the point.
+    """
+    with _lock:
+        found = sessions_mod.live(_db())
+    return {
+        "total": len(found),
+        "ungoverned": sum(1 for s in found if s.ungoverned),
+        "rows": [
+            {"session_id": s.session_id, "user_name": s.user_name,
+             "status": s.status, "command": s.command, "client": s.client,
+             "driver": s.driver, "login_time": s.login_time,
+             "duration": s.duration, "encrypted": s.encrypted,
+             "principal": s.principal, "kind": s.kind}
+            for s in found
+        ],
+    }
 
 
 class ReplayRequest(BaseModel):

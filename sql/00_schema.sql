@@ -34,6 +34,10 @@ CREATE OR REPLACE TABLE AGENT_SESSION (
     AGENT_NAME      VARCHAR(200),
     PRINCIPAL       VARCHAR(128),
     CLIENT_INFO     VARCHAR(2000),
+    -- Exasol's own session id, from SELECT CURRENT_SESSION. SESSION_ID above is
+    -- AIRLOCK's uuid and means nothing to the database; this is what lets the
+    -- bypass monitor ask of a live connection "did we let this one in?".
+    EXA_SESSION_ID  VARCHAR(64),
     STARTED_AT      TIMESTAMP      DEFAULT CURRENT_TIMESTAMP
 );
 

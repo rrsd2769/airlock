@@ -122,10 +122,16 @@ class Airlock:
         ).fetchone()
         if existing:
             return
+        # Exasol's own session id, recorded next to AIRLOCK's. Our SESSION_ID is
+        # a uuid the database has never heard of, so without this pairing a live
+        # connection cannot be matched back to the traffic it was allowed to
+        # send -- and the bypass monitor's whole question is which of the
+        # connections Exasol currently has came in through here.
+        exa = self.conn.execute("SELECT CURRENT_SESSION AS S").fetchone()["S"]
         self.conn.execute(
-            "INSERT INTO AIRLOCK.AGENT_SESSION (SESSION_ID, PRINCIPAL) "
-            "VALUES ({sid}, {principal})",
-            {"sid": self.session_id, "principal": self.principal},
+            "INSERT INTO AIRLOCK.AGENT_SESSION (SESSION_ID, PRINCIPAL, EXA_SESSION_ID) "
+            "VALUES ({sid}, {principal}, {exa})",
+            {"sid": self.session_id, "principal": self.principal, "exa": str(exa)},
         )
 
     def submit(self, sql: str, max_rows: int = 200) -> GatewayResult:

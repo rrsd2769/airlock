@@ -347,6 +347,35 @@ pre {
 
 /* ---------- replay ---------- */
 .replay-grid { display: grid; grid-template-columns: minmax(330px, 400px) 1fr; gap: 22px; align-items: start; }
+/* Live-connection classes.
+ *
+ * inline-block, not flex: display:flex on a <td> takes the cell out of the
+ * table's column layout and the measured columns stop lining up with their
+ * headers. Every selector here is scoped to #tab-sessions -- an unscoped
+ * thead/td rule reaches every table on the page, which has crushed the leading
+ * column of three unrelated panels before now.
+ */
+#tab-sessions .cls {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+  border: 1px solid var(--line); color: var(--muted); background: #0e1116;
+}
+#tab-sessions .cls.governed { color: var(--allow); border-color: #1d3b25; background: #0d1a11; }
+#tab-sessions .cls.console  { color: var(--muted); }
+#tab-sessions .cls.internal { color: var(--muted); opacity: .65; }
+/* The one the panel exists for. */
+#tab-sessions .cls.ungoverned { color: var(--deny); border-color: #4a1f1d; background: #1a0e0e; }
+
+/* At 960px -- the width the demo records at -- the client string and the login
+   timestamp both wrap to two lines and the rows lose their rhythm. The table
+   scrolls inside its own box, so holding them on one line costs nothing. */
+#tab-sessions #live-body td { white-space: nowrap; }
+
+#tab-sessions .foot {
+  margin: 0; padding: 10px 14px 12px; font-size: 12px; line-height: 1.5;
+  color: var(--muted); border-top: 1px solid var(--line);
+}
+
 @media (max-width: 880px) { .replay-grid { grid-template-columns: 1fr; } }
 /* The shared box. Everything that is a section of the console is one of these:
    a border to draw the edge, a lifted background to separate it from the page,
