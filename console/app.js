@@ -390,11 +390,40 @@ async function loadSessions() {
   } catch (e) { fail($('#session-body').parentElement.parentElement, e); }
 }
 
+// The ledger says what the airlock allowed. This says what is connected at all,
+// and the gap between the two is the only place a bypass can show up: Exasol
+// Personal has no SQL audit to reconcile against, so the question is live.
+async function loadLive() {
+  try {
+    const o = await api('/api/sessions/live');
+
+    const pill = $('#bypass');
+    pill.className = 'pill ' + (o.ungoverned ? 'bad' : 'ok');
+    pill.title = o.ungoverned
+      ? 'a live connection did not come through the airlock'
+      : 'every live connection came through the airlock or is Exasol\u2019s own';
+    pill.innerHTML = `<span class="dot live"></span> ${o.ungoverned
+      ? `${o.ungoverned} ungoverned`
+      : 'all governed'}`;
+
+    $('#live-body').innerHTML = o.rows.map((s) => `
+      <tr>
+        <td><span class="cls ${esc(s.kind)}">${esc(s.kind)}</span></td>
+        <td>${esc(s.principal || s.user_name)}</td>
+        <td class="kind">${esc(s.client)}</td>
+        <td class="kind">${esc(s.status)}</td>
+        <td class="kind">${esc(String(s.login_time).split('.')[0])}</td>
+        <td class="num kind">${esc(s.session_id)}</td>
+      </tr>`).join('');
+  } catch (e) { fail($('#live-body').parentElement.parentElement, e); }
+}
+
 /* ---------------- wiring ---------------- */
 
 const loaders = {
   overview: loadRecent, ledger: loadLedger, taint: loadTaint,
-  replay: loadPolicies, policies: loadPolicies, sessions: loadSessions,
+  replay: loadPolicies, policies: loadPolicies,
+  sessions: () => { loadLive(); loadSessions(); },
 };
 
 // The breadcrumb names the page, so it needs a label per destination rather
@@ -479,4 +508,5 @@ setInterval(() => {
   if ($('#drawer').classList.contains('on')) return;
   if (activeTab === 'ledger') loadLedger();
   if (activeTab === 'overview') loadRecent();
+  if (activeTab === 'sessions') loadLive();
 }, 5000);

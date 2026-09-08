@@ -244,6 +244,25 @@
 
   <section class="panel" id="tab-sessions">
     <div class="card flush">
+      <div class="head">
+        <h4>Live connections</h4>
+        <span class="pill" id="bypass"><span class="dot live"></span> &mdash;</span>
+      </div>
+      <div class="scroll">
+      <table>
+        <thead><tr>
+          <th>class</th><th>who</th><th>client</th><th>state</th>
+          <th>connected</th><th class="num">session</th>
+        </tr></thead>
+        <tbody id="live-body"></tbody>
+      </table>
+      </div>
+      <p class="foot">Every session Exasol currently has. A connection the
+        gateway never registered reached the database without passing through
+        the airlock &mdash; this detects that; it does not prevent it.</p>
+    </div>
+
+    <div class="card flush">
       <div class="head"><h4>Agent sessions</h4></div>
       <div class="scroll">
       <table>
