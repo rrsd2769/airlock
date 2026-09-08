@@ -23,8 +23,20 @@ def _default_password() -> str:
 @dataclass(frozen=True)
 class Settings:
     dsn: str = os.getenv("AIRLOCK_DSN", "127.0.0.1:8563")
-    user: str = os.getenv("AIRLOCK_USER", "sys")
-    password: str = os.getenv("AIRLOCK_PASSWORD") or _default_password()
+    # The gateway is not a superuser. It reads the rule set and appends to the
+    # ledger, and Exasol refuses it everything else -- so `protect-airlock` is
+    # enforced by the database rather than by the code the rule constrains.
+    # See sql/40_identities.sql for the grants themselves.
+    user: str = os.getenv("AIRLOCK_USER", "AIRLOCK_SVC")
+    password: str = os.getenv("AIRLOCK_PASSWORD", "airlock-svc")
+    # The console watches; it never writes. A separate identity is what makes
+    # that a property of the connection rather than a promise about the code.
+    console_user: str = os.getenv("AIRLOCK_CONSOLE_USER", "AIRLOCK_CONSOLE")
+    console_password: str = os.getenv("AIRLOCK_CONSOLE_PASSWORD", "airlock-console")
+    # sys, kept for the two jobs that genuinely need it: applying DDL and
+    # creating the other three identities. Nothing on the agent's path uses it.
+    admin_user: str = os.getenv("AIRLOCK_ADMIN_USER", "sys")
+    admin_password: str = os.getenv("AIRLOCK_ADMIN_PASSWORD") or _default_password()
     schema: str = os.getenv("AIRLOCK_SCHEMA", "AIRLOCK")
     principal: str = os.getenv("AIRLOCK_PRINCIPAL", "demo-agent")
     # Local Exasol Personal uses a self-signed certificate.

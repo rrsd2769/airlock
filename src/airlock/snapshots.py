@@ -2,9 +2,9 @@
 
 A write that AIRLOCK allows through gets its affected rows copied first, so the
 compensating statement recorded beside the decision has something to read back
-from. That copy is a real table in the AIRLOCK schema, and tables that nothing
-ever drops are a slow leak -- so the same module that names them knows how to
-find them and how to age them out.
+from. That copy is a real table in the AIRLOCK_SNAP schema, and tables that
+nothing ever drops are a slow leak -- so the same module that names them knows
+how to find them and how to age them out.
 
 A snapshot is worth keeping for exactly as long as you might still reverse the
 write it belongs to. That is a judgement about your data, not something the
@@ -20,7 +20,14 @@ import pyexasol
 
 from .catalog import Catalog
 
-SCHEMA = "AIRLOCK"
+# Snapshots live apart from the governance schema, and the reason is a grant
+# rather than tidiness. Pre-image capture creates a table per allowed write,
+# and Exasol has no privilege for creating one inside a schema you do not own
+# short of CREATE ANY TABLE. Making the gateway the owner of AIRLOCK would
+# hand it the power to drop the ledger, so the snapshots move instead: the
+# gateway owns AIRLOCK_SNAP outright and holds nothing but SELECT and INSERT
+# on AIRLOCK. See sql/40_identities.sql.
+SCHEMA = "AIRLOCK_SNAP"
 PREFIX = "SNAP_"
 
 # Default retention for --prune. A week is long enough that a write noticed on

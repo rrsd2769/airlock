@@ -15,7 +15,7 @@ statements the gateway issues and in what order, not what Exasol replies.
 """
 import pytest
 
-from airlock import policy
+from airlock import policy, snapshots
 from airlock.gateway import Airlock, Measurements
 from airlock.policy import Decision
 from airlock.statement import Statement
@@ -179,7 +179,8 @@ def test_the_snapshot_is_taken_before_the_write_runs():
     result = _submit(conn)
     assert result.decision == policy.ALLOW
     order = [i for i, s in enumerate(conn.statements)
-             if s.startswith("CREATE TABLE AIRLOCK.SNAP_") or s == CUSTOMER_UPDATE]
+             if s.startswith(f"CREATE TABLE {snapshots.SCHEMA}.{snapshots.PREFIX}")
+             or s == CUSTOMER_UPDATE]
     assert len(order) == 2
     assert conn.statements[order[0]].startswith("CREATE TABLE")
 
@@ -194,7 +195,7 @@ def test_a_refused_write_leaves_no_table_behind():
     conn = FakeConn(policies=deny)
     result = _submit(conn)
     assert result.decision == policy.DENY
-    assert conn.issued("CREATE TABLE AIRLOCK.SNAP_") == []
+    assert conn.issued(f"CREATE TABLE {snapshots.SCHEMA}.{snapshots.PREFIX}") == []
 
 
 def test_a_write_whose_pre_image_cannot_be_taken_is_refused_not_executed():
@@ -241,7 +242,7 @@ def test_a_successful_capture_reports_the_table_it_wrote():
     conn = FakeConn()
     result = _submit(conn)
     assert result.snapshot_table is not None
-    assert result.snapshot_table.startswith("AIRLOCK.SNAP_")
+    assert result.snapshot_table.startswith(f"{snapshots.SCHEMA}.{snapshots.PREFIX}")
     assert result.snapshot_table in result.rollback_sql
 
 
@@ -252,7 +253,7 @@ def test_a_successful_capture_reports_the_table_it_wrote():
 def test_statements_with_no_pre_image_never_reach_the_capture(sql):
     conn = FakeConn()
     _submit(conn, sql)
-    assert conn.issued("CREATE TABLE AIRLOCK.SNAP_") == []
+    assert conn.issued(f"CREATE TABLE {snapshots.SCHEMA}.{snapshots.PREFIX}") == []
 
 
 
