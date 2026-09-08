@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import argparse
 import random
+from dataclasses import dataclass
 
+from .approval import approve, pending
 from .db import connect
 from .gateway import Airlock
 
@@ -150,6 +152,31 @@ def _narrow_writes(rng: random.Random) -> list[str]:
     ]
 
 
+def _releasable_writes(rng: random.Random) -> list[str]:
+    """Wide writes that are held for radius and are safe to actually run.
+
+    The corpus is only evidence of an approval loop if some of its holds were
+    really released, which means really executed -- a snapshot table with rows
+    in it and a MERGE somebody could run. Every other wide write above is
+    unsafe to release for a reason that has nothing to do with policy: they
+    rewrite a comment column carrying a planted taint payload, or the market
+    segment the k-anonymity groups are counted over, and letting one through
+    would quietly invalidate a figure the README quotes. These touch
+    O_SHIPPRIORITY, which nothing here reads and nothing in the docs measures,
+    on a table with a declared primary key so the compensating MERGE can be
+    synthesised at all.
+    """
+    lo = rng.choice([1, 20000, 48000, 76000, 100000])
+    # Orderkeys run one per four in this dataset, so the span is ~1,000 rows.
+    hi, pri = lo + 3999, rng.randint(2, 9)
+    return [
+        # 738 rows: comfortably over the 500-row cap, small enough that the
+        # snapshot and its MERGE are readable on camera.
+        "UPDATE TPCH.ORDERS SET O_SHIPPRIORITY = 1 WHERE O_ORDERSTATUS = 'P'",
+        f"UPDATE TPCH.ORDERS SET O_SHIPPRIORITY = {pri} WHERE O_ORDERKEY BETWEEN {lo} AND {hi}",
+    ]
+
+
 def _attacks(rng: random.Random) -> list[str]:
     """The agent turning on the thing that governs it."""
     return [
@@ -169,17 +196,57 @@ MIX = [
     (_identifying_reads, 14),
     (_wide_writes, 8),
     (_narrow_writes, 3),
+    (_releasable_writes, 2),
     (_attacks, 3),
 ]
 
 
-def generate(count: int, seed: int) -> list[str]:
+@dataclass(frozen=True)
+class Planned:
+    """One generated statement, and whether it is safe to release and run.
+
+    The flag travels with the statement rather than being recovered later by
+    matching its text, because by the time a hold is on the queue the only
+    thing left to match on is SQL a human could have written by hand.
+    """
+
+    sql: str
+    releasable: bool = False
+
+
+def generate(count: int, seed: int) -> list[Planned]:
     rng = random.Random(seed)
     pools, weights = zip(*MIX)
     out = []
     for _ in range(count):
         pool = rng.choices(pools, weights=weights, k=1)[0]
-        out.append(rng.choice(pool(rng)))
+        out.append(Planned(rng.choice(pool(rng)),
+                           releasable=pool is _releasable_writes))
+    return out
+
+
+def _release_some(conn, seqs: list[int], rate: float, approver: str,
+                  seed: int) -> list[tuple[int, str]]:
+    """Send a reproducible share of the run's safe holds back through the airlock.
+
+    The releases go through `approval.approve`, which re-enters
+    `gateway.submit`, so an approved statement in the corpus was measured
+    twice, snapshotted, executed and chained exactly as it would have been on
+    the day -- the same objection that makes the ledger evidence rather than
+    fixture data applies to the approval history sitting beside it.
+    """
+    if not seqs or rate <= 0:
+        return []
+    chosen = sorted(random.Random(seed).sample(seqs, round(len(seqs) * rate)))
+    by_seq = {h.ledger_seq: h.approval_id for h in pending(conn)}
+    out = []
+    for seq in chosen:
+        approval_id = by_seq.get(seq)
+        if approval_id is None:
+            continue
+        result = approve(conn, approval_id, approver,
+                         note="released during corpus generation")
+        out.append((approval_id, result.decision))
     return out
 
 
@@ -190,23 +257,43 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=400)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--principal", default="demo-agent")
+    parser.add_argument("--approve-rate", type=float, default=0.0, metavar="R",
+                        help="release this share (0-1) of the holds that are "
+                             "safe to execute, so the corpus carries real "
+                             "approved writes")
+    parser.add_argument("--approve-by", default="alice",
+                        help="who the released holds are approved by")
     args = parser.parse_args()
+
+    if not 0.0 <= args.approve_rate <= 1.0:
+        raise SystemExit("error: --approve-rate must be between 0 and 1")
 
     conn = connect()
     gate = Airlock(conn, principal=args.principal)
     statements = generate(args.count, args.seed)
 
     tally: dict[str, int] = {}
-    for i, sql in enumerate(statements, 1):
-        result = gate.submit(sql, max_rows=5)
+    releasable_holds: list[int] = []
+    for i, planned in enumerate(statements, 1):
+        result = gate.submit(planned.sql, max_rows=5)
         tally[result.decision] = tally.get(result.decision, 0) + 1
+        if planned.releasable and result.decision == "REQUIRE_APPROVAL":
+            releasable_holds.append(result.seq)
         if i % 50 == 0:
             print(f"  {i}/{len(statements)} submitted")
+
+    released = _release_some(conn, releasable_holds, args.approve_rate,
+                             args.approve_by, args.seed)
 
     print("\n" + "=" * 78)
     print(f"{len(statements)} statements through the airlock as {args.principal}")
     for decision in ("ALLOW", "REQUIRE_APPROVAL", "DENY"):
         print(f"  {decision:<18} {tally.get(decision, 0)}")
+    if released:
+        print(f"  released by {args.approve_by:<6} {len(released)} "
+              f"of {len(releasable_holds)} releasable holds")
+        for approval_id, decision in released:
+            print(f"    approval #{approval_id} -> {decision}")
     print("=" * 78)
 
 
