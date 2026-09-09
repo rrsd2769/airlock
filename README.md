@@ -5,7 +5,7 @@
 Exasol is being built as *the agentic database*: autonomous agents connect over
 MCP and run SQL unattended. Exasol's own MCP server ships with a warning that
 those agents can cause data leakage, unauthorized generation, and data
-deletion — and that you must supply your own governance.
+deletion, and that you must supply your own governance.
 
 There isn't any. Once an agent is inside the database, nothing watches it.
 
@@ -21,14 +21,14 @@ written to a tamper-evident ledger.
 
 ## What it does
 
-**1. Intent firewall.** Statements are parsed into structured features — tables,
-columns, joins, aggregation level — and matched against declarative policies.
+**1. Intent firewall.** Statements are parsed into structured features (tables,
+columns, joins, aggregation level) and matched against declarative policies.
 Column-level bans, principal scoping, and k-anonymity are enforced
 deterministically in sub-millisecond time. An unparseable statement is denied,
 never waved through.
 
 k-anonymity is *measured*, not assumed. Aggregating is not the same as being
-anonymous — what hides a person is how many people share their bucket — so
+anonymous: what hides a person is how many people share their bucket, so
 before releasing an aggregate over a protected column AIRLOCK rewrites the query
 into the size of its smallest group and runs it. `AVG(C_ACCTBAL)` by market
 segment (569 per group) passes; the same average sliced by nation *and* segment
@@ -36,10 +36,10 @@ segment (569 per group) passes; the same average sliced by nation *and* segment
 
 **2. Blast-radius preflight.** Before any write executes, AIRLOCK rewrites it
 into the `SELECT COUNT(*)` that measures exactly how many rows it would touch,
-and runs it. Not an optimiser estimate — a real count, compared against a policy
+and runs it. Not an optimiser estimate: a real count, compared against a policy
 budget. It also captures a pre-image of exactly the rows the write will change
-and synthesises the compensating statement that reverses it — keyed on the
-target's primary key, read from the catalog — so an agent's UPDATE or DELETE has
+and synthesises the compensating statement that reverses it, keyed on the
+target's primary key, read from the catalog, so an agent's UPDATE or DELETE has
 a real undo, recorded in the ledger beside the decision. Where the table has no
 key to match the pre-image back by, AIRLOCK narrows the statement or says plainly
 that it cannot generate one, rather than emitting SQL that would restore the
@@ -49,7 +49,7 @@ The pre-image is taken only for a write that is actually going to run, so a
 refused write costs nothing, and it is taken *before* the write, because
 afterwards it would be a copy of the change rather than of what preceded it. A
 write whose pre-image cannot be captured is refused rather than executed without
-an undo — the ledger records that refusal and why. Snapshots are ordinary tables
+an undo; the ledger records that refusal and why. Snapshots are ordinary tables
 in the `AIRLOCK_SNAP` schema, owned by the gateway's own identity so that
 capturing a pre-image needs no rights over `AIRLOCK` itself;
 `python -m airlock.snapshots` lists them with the decision each one belongs to,
@@ -58,7 +58,7 @@ and `--prune` ages them out.
 The corpus in this repo carries **18 pre-image tables** and every compensating
 statement in it is runnable. That is worth demonstrating rather than asserting:
 scribble over a slice of the rows an allowed write touched, run the `MERGE` the
-ledger recorded for it, and the table comes back — including rows whose "before"
+ledger recorded for it, and the table comes back, including rows whose "before"
 value was itself the result of an earlier approved release.
 
 *This is only affordable because the engine underneath is a columnar MPP
@@ -66,13 +66,13 @@ analytics database.* On a row store, counting the blast radius of every write on
 the hot path would be the slowest thing in the system.
 
 **3. Data-side prompt-injection taint.** Everyone scans the prompt. Almost
-nobody scans the rows coming back — which is where injection against a database
+nobody scans the rows coming back, which is where injection against a database
 agent actually lives, planted months earlier in a column that legitimately
 accepts free text from outside.
 
 Two halves. A **sweep** scores every free-text column in a schema and records
-what it finds in `AIRLOCK.TAINT` — catalog-driven, so a new table needs no
-change to any list:
+what it finds in `AIRLOCK.TAINT` (catalog-driven, so a new table needs no
+change to any list):
 
 ```bash
 uv run python -m airlock.taint --schema TPCH
@@ -83,21 +83,21 @@ And a **per-query scan**: before an allowed `SELECT` releases its rows, AIRLOCK
 rewrites it to measure the worst taint score among the rows it would return, and
 withholds the result set if that crosses the policy threshold. Scoring both of
 the free-text columns wide enough to hide a payload in the 120,515-row
-`LINEITEM` table — 241,030 scores — takes 132 ms, because the scoring runs next
+`LINEITEM` table (241,030 scores) takes 132 ms, because the scoring runs next
 to the data instead of dragging it out.
 
 Aggregates are skipped: they return numbers, and an injection needs text to ride
 out on.
 
 **4. Tamper-evident ledger + replay.** Every decision is hash-chained to the one
-before it. Verification is a single analytical query — Exasol's native
-`HASH_SHA256` recomputes each entry and a `LAG` window re-links the chain — so
+before it. Verification is a single analytical query: Exasol's native
+`HASH_SHA256` recomputes each entry and a `LAG` window re-links the chain, so
 the audit trail never has to leave the database to be trusted, and needs no
 script language container at all.
 
 The hash covers the whole decision, not just its verdict: who ran the statement,
 which rules fired and why, and the measurements the verdict rested on. That last
-part matters because replay re-decides from those measurements — if they sat
+part matters because replay re-decides from those measurements: if they sat
 outside the hash, anyone with `UPDATE` on the table could change what a replay
 concludes without breaking a single link.
 
@@ -117,7 +117,7 @@ before you have to live with it.
 An approval is the decision's third input, alongside the features and the rules,
 so replay re-decides a released statement as released. Without that, every
 approved write in the history would read as *newly blocked* under any amendment
-at all — including amendments that cannot touch a write.
+at all, including amendments that cannot touch a write.
 
 **5. A privilege boundary Exasol enforces, not AIRLOCK.** `protect-airlock` says
 an agent must not edit the rules or erase the ledger that bind it. For most of
@@ -135,7 +135,7 @@ whether or not AIRLOCK's own code is correct:
 | `DEMO_AGENT` | The agent's own database identity. Reaches the policy-derived safe views and nothing else. |
 
 The agent's identity cannot read the ledger, cannot read the policy table, and
-cannot read a customer's phone number — so an agent that connects *around* the
+cannot read a customer's phone number, so an agent that connects *around* the
 airlock is refused by Exasol rather than by us.
 
 **Its scope, stated honestly: it constrains and detects. It does not make bypass
@@ -153,7 +153,7 @@ screen, while it is still connected.
 **7. Approval loop.** `REQUIRE_APPROVAL` used to be a verdict with nowhere to go:
 the engine could hold a statement and nothing could ever let one through. A
 release now re-enters `gateway.submit()` rather than being executed by whoever
-approved it, which is the whole design — the pre-image capture is gated on the
+approved it, which is the whole design: the pre-image capture is gated on the
 verdict being `ALLOW`, so a statement run around the gateway would have no
 snapshot and no undo. The blast radius is measured again, against the table as it
 is now. The release gets its own ledger entry, chained onto the held one, and the
@@ -161,7 +161,7 @@ held entry is never edited: a queue whose approvals rewrote history would be
 asking the audit trail to vouch for a decision it had itself been changed to
 agree with.
 
-An approval releases a hold. It never overrides a `DENY` — the demotion lives in
+An approval releases a hold. It never overrides a `DENY`: the demotion lives in
 `Decision.apply()`, which `DENY` never reaches, so that is structural rather than
 a convention.
 
@@ -222,8 +222,8 @@ uv run airlock-approve                                    # the approval desk, :
 ```
 
 `--approve-rate` releases a reproducible share of the holds that are safe to
-execute, so the history carries real approved writes — with pre-images behind
-them — rather than a queue nobody ever worked.
+execute, so the history carries real approved writes, with pre-images behind
+them, rather than a queue nobody ever worked.
 
 No script language container is required: the in-database logic is SQL and Lua,
 and Lua is compiled into Exasol itself.
@@ -256,7 +256,7 @@ and Lua is compiled into Exasol itself.
 
 ## Built for
 
-Exasol AI + Data Challenge 2026 — **AI Trust, Safety & Governance**.
+Exasol AI + Data Challenge 2026: **AI Trust, Safety & Governance**.
 
 ## License
 
