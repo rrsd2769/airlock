@@ -210,9 +210,16 @@ printed at startup if none is set, so the desk is never open by accident.
 
 Requires [Exasol Personal](https://github.com/exasol/exasol-personal) running locally.
 
+**1. Install and seed.**
+
 ```bash
 curl https://www.exasol.com/install/starter-kit.sh | sh   # database + sample data
 ./scripts/bootstrap.sh                                    # schema, scripts, policies
+```
+
+**2. Run it.**
+
+```bash
 uv run python -m airlock.demo                             # see what it stops
 uv run python -m airlock.taint --schema TPCH              # find the poisoned rows
 uv run python -m airlock.traffic --count 400 --approve-rate 0.5   # a history
