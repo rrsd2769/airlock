@@ -15,6 +15,9 @@
 --                     rights over AIRLOCK itself.
 --   AIRLOCK_CONSOLE   the read-only observer behind the console API. Selects
 --                     from everything, writes to nothing.
+--   AIRLOCK_RULES     the rules desk. Can write AIRLOCK.POLICY and nothing
+--                     else -- deliberately not AIRLOCK_SVC, which must never
+--                     hold write access to the rules that bind it.
 --   DEMO_AGENT        the agent's own database identity. Reaches the policy-
 --                     derived safe views and nothing else -- so an agent that
 --                     connects *around* the airlock is refused by Exasol rather
@@ -34,12 +37,14 @@
 -------------------------------------------------------------------------------
 -- Passwords. Local-only demo defaults, matching config.py, so a fresh clone
 -- works with no .env. Override AIRLOCK_PASSWORD / AIRLOCK_CONSOLE_PASSWORD /
--- AIRLOCK_DEMO_AGENT_PASSWORD and edit the three literals below together.
--- Exasol requires double quotes here; single quotes are a syntax error.
+-- AIRLOCK_RULES_PASSWORD / AIRLOCK_DEMO_AGENT_PASSWORD and edit the four
+-- literals below together. Exasol requires double quotes here; single quotes
+-- are a syntax error.
 -------------------------------------------------------------------------------
 
 DROP USER IF EXISTS AIRLOCK_SVC CASCADE;
 DROP USER IF EXISTS AIRLOCK_CONSOLE CASCADE;
+DROP USER IF EXISTS AIRLOCK_RULES CASCADE;
 DROP USER IF EXISTS DEMO_AGENT CASCADE;
 
 -------------------------------------------------------------------------------
@@ -122,7 +127,22 @@ GRANT SELECT ON SCHEMA AIRLOCK TO AIRLOCK_CONSOLE;
 GRANT SELECT ON SCHEMA AIRLOCK_SNAP TO AIRLOCK_CONSOLE;
 
 -------------------------------------------------------------------------------
--- 3. DEMO_AGENT -- the agent's own identity
+-- 3. AIRLOCK_RULES -- the rules desk
+--
+-- The one identity with write access to AIRLOCK.POLICY, and the only thing it
+-- can write. Not AIRLOCK_SVC: the gateway serves agent traffic on the same
+-- connection type, and giving it INSERT/UPDATE here would be the same
+-- circularity `protect-airlock` exists to close, one section down -- an agent
+-- that talked the gateway into rewriting its own rules would be back to a
+-- superuser gateway in every way that matters.
+-------------------------------------------------------------------------------
+
+CREATE USER AIRLOCK_RULES IDENTIFIED BY "airlock-rules";
+GRANT CREATE SESSION TO AIRLOCK_RULES;
+GRANT SELECT, INSERT, UPDATE ON AIRLOCK.POLICY TO AIRLOCK_RULES;
+
+-------------------------------------------------------------------------------
+-- 4. DEMO_AGENT -- the agent's own identity
 --
 -- This is the one to run on camera. Connected directly, bypassing the gateway
 -- entirely, it is refused on TPCH.CUSTOMER, on AIRLOCK.LEDGER and on

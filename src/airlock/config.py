@@ -33,6 +33,11 @@ class Settings:
     # that a property of the connection rather than a promise about the code.
     console_user: str = os.getenv("AIRLOCK_CONSOLE_USER", "AIRLOCK_CONSOLE")
     console_password: str = os.getenv("AIRLOCK_CONSOLE_PASSWORD", "airlock-console")
+    # The rules desk. A fourth identity rather than reusing AIRLOCK_SVC: the
+    # gateway must never hold write access to the rules that bind it -- see
+    # sql/40_identities.sql.
+    rules_user: str = os.getenv("AIRLOCK_RULES_USER", "AIRLOCK_RULES")
+    rules_password: str = os.getenv("AIRLOCK_RULES_PASSWORD", "airlock-rules")
     # sys, kept for the two jobs that genuinely need it: applying DDL and
     # creating the other three identities. Nothing on the agent's path uses it.
     admin_user: str = os.getenv("AIRLOCK_ADMIN_USER", "sys")

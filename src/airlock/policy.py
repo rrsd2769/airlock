@@ -127,6 +127,83 @@ def denied_columns(conn: pyexasol.ExaConnection) -> dict[tuple[str, str], set[st
     return out
 
 
+# Which RULE_KIND needs which fields to ever match in evaluate() below. A rule
+# missing one of these does not error against the schema -- it inserts fine
+# and then never fires, which is a worse failure than a rejection at the seam.
+_RULE_KINDS = {"COLUMN_ACCESS", "MIN_AGGREGATION", "BLAST_RADIUS",
+               "SCHEMA_SCOPE", "SCHEMA_DENY", "TAINT_BLOCK"}
+_NEEDS_TARGET_COLUMN = {"COLUMN_ACCESS", "MIN_AGGREGATION"}  # see _touches_column
+_NEEDS_TARGET_SCHEMA = {"SCHEMA_DENY", "SCHEMA_SCOPE"}
+_NEEDS_THRESHOLD = {"MIN_AGGREGATION", "BLAST_RADIUS", "TAINT_BLOCK"}
+
+
+def _validate_new_rule(rule_kind: str, effect: str, target_schema: str | None,
+                        target_column: str | None, threshold: float | None) -> None:
+    if rule_kind not in _RULE_KINDS:
+        raise ValueError(f"unknown RULE_KIND {rule_kind!r}")
+    if effect not in (ALLOW, DENY, REQUIRE_APPROVAL):
+        raise ValueError(f"unknown EFFECT {effect!r}")
+    if rule_kind in _NEEDS_TARGET_COLUMN and not target_column:
+        raise ValueError(f"{rule_kind} needs TARGET_COLUMN -- evaluate() never "
+                         f"matches without one")
+    if rule_kind in _NEEDS_TARGET_SCHEMA and not target_schema:
+        raise ValueError(f"{rule_kind} needs TARGET_SCHEMA")
+    if rule_kind == "SCHEMA_SCOPE" and effect != ALLOW:
+        # evaluate() only reads EFFECT == ALLOW rows to compose the allowed
+        # set (see the SCHEMA_SCOPE branch below) -- a DENY row here inserts
+        # cleanly and is never consulted.
+        raise ValueError("SCHEMA_SCOPE only composes its allowed set from "
+                         "ALLOW rows; a DENY row here never matches")
+    if rule_kind in _NEEDS_THRESHOLD and threshold is None:
+        raise ValueError(f"{rule_kind} needs THRESHOLD")
+
+
+def add_rule(conn: pyexasol.ExaConnection, *, name: str, rule_kind: str, effect: str,
+             target_schema: str | None = None, target_table: str | None = None,
+             target_column: str | None = None, principal: str | None = None,
+             threshold: float | None = None, note: str | None = None) -> int:
+    """Insert a new POLICY row, after validating it can ever match.
+
+    Runs on the rules desk's own identity (sql/40_identities.sql), never
+    AIRLOCK_SVC -- the gateway must never hold write access to the rules that
+    bind it. The caller is expected to serialise writes (rules_api.py does,
+    the same way api.py and approve_api.py serialise theirs), which is what
+    makes the NAME lookup below safe from a concurrent insert of the same name.
+    """
+    _validate_new_rule(rule_kind, effect, target_schema, target_column, threshold)
+    conn.execute(
+        """
+        INSERT INTO AIRLOCK.POLICY
+            (NAME, RULE_KIND, EFFECT, TARGET_SCHEMA, TARGET_TABLE, TARGET_COLUMN,
+             PRINCIPAL, THRESHOLD, NOTE)
+        VALUES ({name}, {rule_kind}, {effect}, {target_schema}, {target_table},
+                {target_column}, {principal}, {threshold}, {note})
+        """,
+        {"name": name, "rule_kind": rule_kind, "effect": effect,
+         "target_schema": target_schema, "target_table": target_table,
+         "target_column": target_column, "principal": principal,
+         "threshold": threshold, "note": note},
+    )
+    row = conn.execute(
+        "SELECT POLICY_ID FROM AIRLOCK.POLICY WHERE NAME = {name} "
+        "ORDER BY POLICY_ID DESC",
+        {"name": name},
+    ).fetchone()
+    return int(row["POLICY_ID"])
+
+
+def disable_rule(conn: pyexasol.ExaConnection, policy_id: int) -> bool:
+    """Turn a rule off. Never a DELETE -- a disabled rule stays visible to
+    anyone reading history, the same append-over-mutate posture already used
+    for the ledger and the approval queue. Returns whether a row existed.
+    """
+    cursor = conn.execute(
+        "UPDATE AIRLOCK.POLICY SET IS_ENABLED = FALSE WHERE POLICY_ID = {pid}",
+        {"pid": policy_id},
+    )
+    return cursor.rowcount() > 0
+
+
 def evaluate(features: Features, policies: list[dict], *,
              affected_rows: int | None = None,
              min_group: int | None = None,
