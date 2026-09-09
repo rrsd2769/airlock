@@ -15,8 +15,17 @@ views at all because it reads as protection.
 So the views are generated from AIRLOCK.POLICY. Adding a COLUMN_ACCESS DENY and
 re-running `--apply` is the whole change; there is no second place to edit.
 
+Adding or disabling a COLUMN_ACCESS rule through the rules desk (rules_api.py)
+does **not** run this file's `apply()` -- that identity holds no DDL or GRANT
+privilege on this schema, deliberately (see sql/40_identities.sql), and
+`apply()` itself still only ever runs as sys. The rules desk's response
+carries `views_stale: true` when a write might have changed what these views
+should project; `--check` below is how you find out for sure, and `--apply`
+is still the only thing that fixes it.
+
     uv run python -m airlock.identities            # print the DDL
     uv run python -m airlock.identities --apply    # and run it
+    uv run python -m airlock.identities --check    # report drift, change nothing
 
 Run as sys: this creates objects in AIRLOCK over base tables in another schema.
 """
@@ -99,16 +108,76 @@ def apply(conn: pyexasol.ExaConnection) -> list[SafeView]:
     return views
 
 
+def _live_view_columns(conn: pyexasol.ExaConnection) -> dict[str, tuple[str, ...]]:
+    """Bare view name -> projected columns, in order, for every AIRLOCK.V_*
+    view that actually exists right now. Not privilege-filtered here because
+    this is only ever called as sys (see check() and main())."""
+    rows = conn.execute(
+        "SELECT COLUMN_TABLE AS V, COLUMN_NAME AS C FROM SYS.EXA_ALL_COLUMNS "
+        "WHERE COLUMN_SCHEMA = {schema} AND COLUMN_TABLE LIKE 'V\\_%' ESCAPE '\\' "
+        "ORDER BY COLUMN_TABLE, COLUMN_ORDINAL_POSITION",
+        {"schema": SCHEMA},
+    ).fetchall()
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        out.setdefault(row["V"], []).append(row["C"])
+    return {name: tuple(cols) for name, cols in out.items()}
+
+
+def check(conn: pyexasol.ExaConnection) -> list[str]:
+    """Compare the views DEMO_AGENT actually reads through against what
+    current policy implies. Read-only, changes nothing --
+    the fix for anything this reports is still `--apply`.
+
+    Two ways a view can be out of sync, both real once rules can be added or
+    disabled live rather than only by hand-editing sql/10_policies.sql: a
+    desired view is missing or projects the wrong columns (a DENY that looks
+    active but is not yet enforced -- the leak candidate 4 is about), or a
+    view exists for a table current policy no longer denies anything on (a
+    disabled DENY that is still being enforced -- `apply()` never drops an
+    orphan, so this one needs a person, not another `--apply`).
+    """
+    desired = {v.name.removeprefix(f"{SCHEMA}."): v for v in safe_views(conn)}
+    live = _live_view_columns(conn)
+    messages = []
+    for bare_name, view in sorted(desired.items()):
+        cols = live.get(bare_name)
+        if cols is None:
+            messages.append(f"{view.name}: missing -- run --apply")
+        elif cols != view.projected:
+            messages.append(f"{view.name}: projects the wrong columns -- run --apply")
+    for bare_name in sorted(set(live) - set(desired)):
+        messages.append(
+            f"{SCHEMA}.{bare_name}: orphaned -- policy no longer denies anything "
+            f"on this table, but the view and its grant still exist; --apply will "
+            f"not drop it, drop it by hand if you want it gone"
+        )
+    return messages
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m airlock.identities",
         description="Generate the safe views the agent identity reads through.")
     parser.add_argument("--apply", action="store_true",
                         help="run the DDL instead of printing it")
+    parser.add_argument("--check", action="store_true",
+                        help="report drift against current policy and exit; "
+                             "changes nothing, ignores --apply")
     args = parser.parse_args()
 
     from .db import connect_admin
     conn = connect_admin()
+
+    if args.check:
+        stale = check(conn)
+        if not stale:
+            print("all safe views match current policy")
+            return
+        print(f"{len(stale)} view(s) out of sync:\n")
+        for message in stale:
+            print(f"  {message}")
+        raise SystemExit(1)
 
     views = apply(conn) if args.apply else safe_views(conn)
     if not views:

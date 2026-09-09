@@ -84,16 +84,22 @@ def add(rule: NewRule) -> dict:
             policy_id = policy.add_rule(_db(), **rule.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"policy_id": policy_id}
+    # A COLUMN_ACCESS row changes what identities.safe_views() would generate,
+    # but nothing here regenerates them -- that stays a deliberate, separate
+    # step (see identities.py's module docstring). Say so rather than let the
+    # rule look enforced before it is.
+    return {"policy_id": policy_id, "views_stale": rule.rule_kind == "COLUMN_ACCESS"}
 
 
 @app.post("/rules/{policy_id}/disable", dependencies=[Depends(_authorise)])
 def disable(policy_id: int) -> dict:
     with _lock:
         found = policy.disable_rule(_db(), policy_id)
+        rows = policy.by_ids(_db(), [policy_id]) if found else []
     if not found:
         raise HTTPException(status_code=404, detail=f"no policy #{policy_id}")
-    return {"policy_id": policy_id, "disabled": True}
+    stale = bool(rows) and rows[0]["RULE_KIND"] == "COLUMN_ACCESS"
+    return {"policy_id": policy_id, "disabled": True, "views_stale": stale}
 
 
 def main() -> None:
