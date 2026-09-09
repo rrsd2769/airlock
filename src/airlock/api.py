@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import ledger
+from . import ledger, policy
 from . import replay as replay_mod
 from . import sessions as sessions_mod
 from .config import settings
@@ -211,14 +211,8 @@ def ledger_entry(seq: int) -> dict:
     # Name the rules that fired, so the reason text is traceable to policy rows.
     ids = [int(x) for x in (row.get("MATCHED_POLICIES") or "").split(",")
            if x.strip().isdigit()]
-    if ids:
-        listed = ",".join(str(i) for i in ids)
-        row["POLICIES"] = _rows(
-            f"SELECT POLICY_ID, NAME, RULE_KIND, EFFECT, "
-            f"CAST(THRESHOLD AS DOUBLE) AS THRESHOLD "
-            f"FROM AIRLOCK.POLICY WHERE POLICY_ID IN ({listed}) ORDER BY POLICY_ID")
-    else:
-        row["POLICIES"] = []
+    with _lock:
+        row["POLICIES"] = _clean(policy.by_ids(_db(), ids))
     return row
 
 
@@ -250,14 +244,8 @@ def approvals() -> dict:
 @app.get("/api/policies")
 def policies() -> list[dict]:
     """The rule set as it stands. The console never writes to this table."""
-    return _rows(
-        """
-        SELECT POLICY_ID, NAME, VERSION, IS_ENABLED, RULE_KIND, EFFECT,
-               TARGET_SCHEMA, TARGET_TABLE, TARGET_COLUMN, PRINCIPAL,
-               CAST(THRESHOLD AS DOUBLE) AS THRESHOLD, NOTE
-        FROM AIRLOCK.POLICY ORDER BY POLICY_ID
-        """
-    )
+    with _lock:
+        return _clean(policy.list_all(_db()))
 
 
 @app.get("/api/taint")
