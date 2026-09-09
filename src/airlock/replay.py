@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 import pyexasol
 
 from .analyze import Features
-from .policy import evaluate, load_policies
+from .policy import evaluate, load_policies, validate_new_rule
 
 
 @dataclass
@@ -54,8 +54,24 @@ def _features_from_json(blob: str) -> Features:
 
 
 def amend(policies: list[dict], *, thresholds: dict[str, float] | None = None,
-          disable: set[str] | None = None) -> list[dict]:
-    """Build a hypothetical policy set. The POLICY table is left untouched."""
+          disable: set[str] | None = None, add: list[dict] | None = None) -> list[dict]:
+    """Build a hypothetical policy set. The POLICY table is left untouched.
+
+    `add` previews rules that do not exist yet -- policy.add_rule()'s keyword
+    shape (name, rule_kind, effect, target_schema, ...), one dict per rule.
+    Each is validated with the exact validate_new_rule() add_rule() itself
+    calls, so a rule that previews cleanly here is guaranteed to also insert
+    cleanly through the rules desk, and a rule rejected here would be rejected
+    there too -- one representation, not two designs that can quietly drift
+    apart. Whether a name collides with an existing rule is the caller's
+    question, not this function's: amend() stays a pure build of the list, the
+    same way it always has for thresholds and disable.
+
+    Each new rule gets a negative POLICY_ID (-1, -2, ... in the order given).
+    Real rows are always positive, and evaluate() already uses POLICY_ID 0 for
+    a structural denial that names no policy row -- a negative id cannot be
+    mistaken for either.
+    """
     thresholds = {k.lower(): v for k, v in (thresholds or {}).items()}
     disable = {d.lower() for d in (disable or set())}
     amended = []
@@ -67,7 +83,41 @@ def amend(policies: list[dict], *, thresholds: dict[str, float] | None = None,
         if name in thresholds:
             row["THRESHOLD"] = thresholds[name]
         amended.append(row)
+
+    for i, new_rule in enumerate(add or [], start=1):
+        rule_kind = new_rule["rule_kind"]
+        effect = new_rule["effect"]
+        target_schema = new_rule.get("target_schema")
+        target_column = new_rule.get("target_column")
+        threshold = new_rule.get("threshold")
+        validate_new_rule(rule_kind, effect, target_schema, target_column, threshold)
+        amended.append({
+            "POLICY_ID": -i, "NAME": new_rule["name"], "VERSION": 1, "IS_ENABLED": True,
+            "RULE_KIND": rule_kind, "EFFECT": effect,
+            "TARGET_SCHEMA": target_schema, "TARGET_TABLE": new_rule.get("target_table"),
+            "TARGET_COLUMN": target_column, "PRINCIPAL": new_rule.get("principal"),
+            "THRESHOLD": threshold, "NOTE": new_rule.get("note"),
+        })
     return amended
+
+
+def check_new_rule_names(known: set[str], add: list[dict]) -> None:
+    """Reject an `add` whose NAME already exists or repeats within the list.
+
+    Ambiguous otherwise: a name matching an existing rule could mean "amend
+    it" (that's what `thresholds`/`disable` already do) or "add a second rule
+    under the same name". amend() stays a pure data transform; this is what
+    both callers -- the CLI and the console -- run before calling it.
+    """
+    seen: set[str] = set()
+    for rule in add:
+        name = (rule.get("name") or "").lower()
+        if name in known:
+            raise ValueError(f"a policy named {rule.get('name')!r} already exists; "
+                             f"use --set/disable to amend it instead")
+        if name in seen:
+            raise ValueError(f"add contains {rule.get('name')!r} twice")
+        seen.add(name)
 
 
 def replay(conn: pyexasol.ExaConnection, principal: str,
@@ -146,6 +196,11 @@ def main() -> None:
                                          "--set acctbal-k-anon=100")
     parser.add_argument("--disable", metavar="NAME", action="append", default=[],
                         help="drop a policy from the hypothetical rule set")
+    parser.add_argument("--add-json", dest="add_json", metavar="JSON", action="append",
+                        default=[], help="preview a rule that does not exist yet -- "
+                                         "JSON matching policy.add_rule()'s fields, e.g. "
+                                         '--add-json \'{"name":"x","rule_kind":"TAINT_BLOCK",'
+                                         '"effect":"DENY","threshold":0.5}\'')
     parser.add_argument("--principal", default="demo-agent")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--no-persist", action="store_true",
@@ -161,13 +216,25 @@ def main() -> None:
 
     from .db import connect
     conn = connect()
+    add_rules: list[dict] = []
+    for blob in args.add_json:
+        try:
+            add_rules.append(json.loads(blob))
+        except json.JSONDecodeError as exc:
+            parser.error(f"--add-json is not valid JSON: {exc}")
+
     current = load_policies(conn, args.principal)
     known = {(p["NAME"] or "").lower() for p in current}
     for name in list(thresholds) + list(args.disable):
         if name.lower() not in known:
             parser.error(f"no such policy: {name!r}. known: {sorted(known)}")
 
-    amended = amend(current, thresholds=thresholds, disable=set(args.disable))
+    try:
+        check_new_rule_names(known, add_rules)
+        amended = amend(current, thresholds=thresholds, disable=set(args.disable),
+                        add=add_rules)
+    except (ValueError, KeyError) as exc:
+        parser.error(str(exc))
 
     print("=" * 78)
     print("Policy replay -- what-if, nothing is written to AIRLOCK.POLICY")
@@ -177,7 +244,9 @@ def main() -> None:
         print(f"  {name}: {before} -> {value:g}")
     for name in args.disable:
         print(f"  {name}: disabled")
-    if not thresholds and not args.disable:
+    for rule in add_rules:
+        print(f"  + {rule['name']} ({rule['rule_kind']}, {rule['effect']})")
+    if not thresholds and not args.disable and not add_rules:
         print("  (no amendment -- replaying against the rules as they stand)")
 
     diff = replay(conn, args.principal, policies=amended, limit=args.limit,

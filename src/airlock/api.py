@@ -308,9 +308,12 @@ def live_sessions() -> dict:
 
 
 class ReplayRequest(BaseModel):
-    """A hypothetical rule set: thresholds to move, policies to drop."""
+    """A hypothetical rule set: thresholds to move, policies to drop, rules
+    that don't exist yet to preview -- policy.add_rule()'s keyword shape, one
+    dict per rule in `add`."""
     sets: dict[str, float] = Field(default_factory=dict)
     disable: list[str] = Field(default_factory=list)
+    add: list[dict] = Field(default_factory=list)
     principal: str = "demo-agent"
     limit: int | None = None
 
@@ -330,8 +333,12 @@ def run_replay(req: ReplayRequest) -> dict:
             if name.lower() not in known:
                 raise HTTPException(status_code=400,
                                     detail=f"no such policy: {name}")
-        amended = replay_mod.amend(current, thresholds=req.sets,
-                                   disable=set(req.disable))
+        try:
+            replay_mod.check_new_rule_names(known, req.add)
+            amended = replay_mod.amend(current, thresholds=req.sets,
+                                       disable=set(req.disable), add=req.add)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         diff = replay_mod.replay(conn, req.principal, policies=amended,
                                  limit=req.limit, persist=False)
 
@@ -349,6 +356,8 @@ def run_replay(req: ReplayRequest) -> dict:
             + [{"name": d, "from": _clean(before.get(d.lower())), "to": None}
                for d in req.disable]
         ),
+        "added": [{"name": r["name"], "rule_kind": r["rule_kind"], "effect": r["effect"]}
+                  for r in req.add],
     }
 
 
