@@ -66,18 +66,65 @@ class Decision:
         return ",".join(str(m) for m in self.matched)
 
 
+# The one column list for a POLICY row. Every reader below shares it, so a new
+# column is typed out once rather than drifting across four independent SELECTs.
+_COLUMNS = (
+    "POLICY_ID, NAME, VERSION, IS_ENABLED, RULE_KIND, EFFECT, "
+    "TARGET_SCHEMA, TARGET_TABLE, TARGET_COLUMN, PRINCIPAL, "
+    "CAST(THRESHOLD AS DOUBLE) AS THRESHOLD, NOTE"
+)
+
+
 def load_policies(conn: pyexasol.ExaConnection, principal: str) -> list[dict]:
+    """The rule set as the gateway decides against: enabled, scoped to one principal."""
     return conn.execute(
-        """
-        SELECT POLICY_ID, NAME, RULE_KIND, EFFECT, TARGET_SCHEMA, TARGET_TABLE,
-               TARGET_COLUMN, PRINCIPAL, THRESHOLD, NOTE
+        f"""
+        SELECT {_COLUMNS}
         FROM AIRLOCK.POLICY
         WHERE IS_ENABLED = TRUE
-          AND (PRINCIPAL IS NULL OR PRINCIPAL = {principal})
+          AND (PRINCIPAL IS NULL OR PRINCIPAL = {{principal}})
         ORDER BY POLICY_ID
         """,
         {"principal": principal},
     ).fetchall()
+
+
+def list_all(conn: pyexasol.ExaConnection) -> list[dict]:
+    """The rule set as it stands, unfiltered -- what the console shows."""
+    return conn.execute(f"SELECT {_COLUMNS} FROM AIRLOCK.POLICY ORDER BY POLICY_ID").fetchall()
+
+
+def by_ids(conn: pyexasol.ExaConnection, ids: list[int]) -> list[dict]:
+    """Specific rows by primary key, for naming the rules behind one decision."""
+    if not ids:
+        return []
+    listed = ",".join(str(int(i)) for i in ids)
+    return conn.execute(
+        f"SELECT {_COLUMNS} FROM AIRLOCK.POLICY WHERE POLICY_ID IN ({listed}) "
+        f"ORDER BY POLICY_ID"
+    ).fetchall()
+
+
+def denied_columns(conn: pyexasol.ExaConnection) -> dict[tuple[str, str], set[str]]:
+    """Columns each table's enabled COLUMN_ACCESS DENY rules withhold.
+
+    A different question from the readers above -- not "which policies apply"
+    but "which columns are denied" -- so it keeps its own WHERE clause rather
+    than filtering a general row list after the fact.
+    """
+    rows = conn.execute(
+        "SELECT TARGET_SCHEMA AS S, TARGET_TABLE AS T, TARGET_COLUMN AS C "
+        "FROM AIRLOCK.POLICY "
+        "WHERE RULE_KIND = 'COLUMN_ACCESS' AND EFFECT = 'DENY' "
+        "AND IS_ENABLED AND TARGET_SCHEMA IS NOT NULL "
+        "AND TARGET_TABLE IS NOT NULL AND TARGET_COLUMN IS NOT NULL"
+    ).fetchall()
+
+    out: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        key = (row["S"].upper(), row["T"].upper())
+        out.setdefault(key, set()).add(row["C"].upper())
+    return out
 
 
 def evaluate(features: Features, policies: list[dict], *,

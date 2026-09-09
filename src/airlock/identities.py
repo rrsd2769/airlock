@@ -27,6 +27,8 @@ from dataclasses import dataclass
 
 import pyexasol
 
+from . import policy
+
 # The identity the safe views exist for: the agent's own database login, used
 # when it connects around the gateway rather than through it.
 AGENT_USER = "DEMO_AGENT"
@@ -62,23 +64,6 @@ class SafeView:
         return f"GRANT SELECT ON {self.name} TO {AGENT_USER}"
 
 
-def _denied_columns(conn: pyexasol.ExaConnection) -> dict[tuple[str, str], set[str]]:
-    """Columns each table's enabled COLUMN_ACCESS DENY rules withhold."""
-    rows = conn.execute(
-        "SELECT TARGET_SCHEMA AS S, TARGET_TABLE AS T, TARGET_COLUMN AS C "
-        "FROM AIRLOCK.POLICY "
-        "WHERE RULE_KIND = 'COLUMN_ACCESS' AND EFFECT = 'DENY' "
-        "AND IS_ENABLED AND TARGET_SCHEMA IS NOT NULL "
-        "AND TARGET_TABLE IS NOT NULL AND TARGET_COLUMN IS NOT NULL"
-    ).fetchall()
-
-    out: dict[tuple[str, str], set[str]] = {}
-    for row in rows:
-        key = (row["S"].upper(), row["T"].upper())
-        out.setdefault(key, set()).add(row["C"].upper())
-    return out
-
-
 def safe_views(conn: pyexasol.ExaConnection) -> list[SafeView]:
     """A view per table the rule set denies a column on, widest scope first.
 
@@ -87,7 +72,7 @@ def safe_views(conn: pyexasol.ExaConnection) -> list[SafeView]:
     way a reader of the base table expects, minus the withheld columns.
     """
     views = []
-    for (schema, table), denied in sorted(_denied_columns(conn).items()):
+    for (schema, table), denied in sorted(policy.denied_columns(conn).items()):
         rows = conn.execute(
             "SELECT COLUMN_NAME AS C FROM SYS.EXA_ALL_COLUMNS "
             "WHERE COLUMN_SCHEMA = {schema} AND COLUMN_TABLE = {tbl} "
