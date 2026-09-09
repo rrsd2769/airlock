@@ -137,8 +137,8 @@ _NEEDS_TARGET_SCHEMA = {"SCHEMA_DENY", "SCHEMA_SCOPE"}
 _NEEDS_THRESHOLD = {"MIN_AGGREGATION", "BLAST_RADIUS", "TAINT_BLOCK"}
 
 
-def _validate_new_rule(rule_kind: str, effect: str, target_schema: str | None,
-                        target_column: str | None, threshold: float | None) -> None:
+def validate_new_rule(rule_kind: str, effect: str, target_schema: str | None,
+                       target_column: str | None, threshold: float | None) -> None:
     if rule_kind not in _RULE_KINDS:
         raise ValueError(f"unknown RULE_KIND {rule_kind!r}")
     if effect not in (ALLOW, DENY, REQUIRE_APPROVAL):
@@ -170,7 +170,7 @@ def add_rule(conn: pyexasol.ExaConnection, *, name: str, rule_kind: str, effect:
     the same way api.py and approve_api.py serialise theirs), which is what
     makes the NAME lookup below safe from a concurrent insert of the same name.
     """
-    _validate_new_rule(rule_kind, effect, target_schema, target_column, threshold)
+    validate_new_rule(rule_kind, effect, target_schema, target_column, threshold)
     conn.execute(
         """
         INSERT INTO AIRLOCK.POLICY
