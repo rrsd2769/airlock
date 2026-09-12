@@ -235,6 +235,9 @@ them, rather than a queue nobody ever worked.
 No script language container is required: the in-database logic is SQL and Lua,
 and Lua is compiled into Exasol itself.
 
+Full requirements, troubleshooting, and connecting an MCP agent are in
+[docs/SETUP.md](docs/SETUP.md).
+
 ## Repository layout
 
 | Path | What's in it |
