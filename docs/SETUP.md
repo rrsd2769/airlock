@@ -29,7 +29,7 @@ deployment.
 > Installing the Python SLC (`exasol slc install python3`) pulls a multi-GB
 > image inside the VM. The launcher only allows VM init 4 minutes, so on a slow
 > connection it times out, kills the VM mid-write, and corrupts the ext4
-> filesystem — after which the database will not start. If you hit that:
+> filesystem, after which the database will not start. If you hit that:
 > `e2fsck -f -y <deployment>/local/runtime/vm/data.img`, then
 > `exasol slc remove python3 --no-restart`, then `exasol start`.
 
