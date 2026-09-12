@@ -11,3 +11,6 @@ console/dist/
 .pytest_cache/
 .ruff_cache/
 *.log
+.claude/
+scripts/demo_release_latest.py
+scripts/demo_tamper.py
