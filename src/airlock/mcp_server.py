@@ -32,10 +32,22 @@ _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*\Z")
 
 
 def _gate() -> Airlock:
+    """The shared gateway, reconnecting if the server dropped the connection.
+
+    Same reasoning as `api.py`'s `_db()`: a long-lived MCP server process
+    outlives its socket across a corpus rebuild, and the alternative is every
+    tool call failing until the process restarts.
+    """
     global _conn, _airlock
-    if _airlock is None:
-        _conn = connect()
-        _airlock = Airlock(_conn)
+    if _conn is not None:
+        try:
+            _conn.execute("SELECT 1")
+            return _airlock
+        except Exception:
+            _conn = None
+            _airlock = None
+    _conn = connect()
+    _airlock = Airlock(_conn)
     return _airlock
 
 
